@@ -1,0 +1,42 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Market data, generated reports, and runtime outputs
+.yfinance_cache/
+*.csv
+*.parquet
+*.feather
+*.pkl
+*.pickle
+*.db
+*.sqlite*
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.log
+
+# Large/local data directories
+testdata/hisseler/
+data/
+datasets/
+
