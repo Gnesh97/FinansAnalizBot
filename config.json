@@ -1,0 +1,60 @@
+{
+    "stock_symbols": [
+        "UFO",
+        "ASTS",
+        "RXT",
+        "RDW",
+        "PL",
+        "RKLB",
+        "LUNR",
+        "ORCL",
+        "CRWV"
+    ],
+    "scan_schedule": {
+        "monday": [
+            "10:00",
+            "13:00",
+            "16:20",
+            "20:00",
+            "22:45",
+            "23:58"
+        ],
+        "tuesday": [
+            "10:00",
+            "13:00",
+            "16:20",
+            "20:00",
+            "22:45",
+            "23:58"
+        ],
+        "wednesday": [
+            "10:00",
+            "13:00",
+            "16:20",
+            "20:00",
+            "22:45",
+            "23:58"
+        ],
+        "thursday": [
+            "10:00",
+            "13:00",
+            "16:20",
+            "20:00",
+            "22:45",
+            "23:58"
+        ],
+        "friday": [
+            "10:00",
+            "13:00",
+            "16:20",
+            "20:00",
+            "22:45",
+            "23:58"
+        ]
+    },
+    "portfolio_size": 400,
+    "risk_percentage": 10,
+    "prefer_alpha_vantage": false,
+    "telegram_summary": false,
+    "telegram_decision_messages": true
+}
