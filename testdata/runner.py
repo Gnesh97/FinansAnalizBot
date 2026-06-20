@@ -4578,6 +4578,12 @@ def _write_execution_bot_readiness_section(latest_dir, summary):
         f"- submit_duplicate_count: {int(summary.get('submit_duplicate_count', 0) or 0)}",
         f"- skipped_duplicate_count: {int(summary.get('skipped_duplicate_count', 0) or 0)}",
         f"- preview_duplicates_do_not_block_future_submit: {summary.get('preview_duplicates_do_not_block_future_submit', True)}",
+        f"- pre_submit_readiness_status: {summary.get('pre_submit_readiness_status', 'not_generated')}",
+        f"- blocking_checks_count: {int(summary.get('blocking_checks_count', 0) or 0)}",
+        f"- warning_checks_count: {int(summary.get('warning_checks_count', 0) or 0)}",
+        "- submit_allowed: false",
+        f"- reason submit not allowed: {summary.get('reason_submit_not_allowed', 'Submit intentionally disabled.')}",
+        f"- pre_submit_readiness_report_path: {summary.get('pre_submit_readiness_report_path', 'reports/latest/pre_submit_readiness_report.md')}",
         f"- execution_preview_report_path: {summary.get('execution_preview_report_path', 'reports/latest/execution_preview_report.md')}",
         f"- execution_audit_log_path: {summary.get('execution_audit_log_path', 'reports/latest/execution_audit_log.csv')}",
         f"- history_audit_log_path: {summary.get('history_audit_log_path', 'reports/history/execution_audit_log.csv')}",
@@ -4596,9 +4602,9 @@ def _write_execution_bot_readiness_section(latest_dir, summary):
     path.write_text(text.rstrip() + "\n\n" + "\n".join(section), encoding="utf-8")
 
 
-def run_execution_preview_check(data_folder="hisseler", report_output_dir="reports", make_chatgpt_report=False):
+def run_execution_preview_check(data_folder="hisseler", report_output_dir="reports", make_chatgpt_report=False, pre_submit_check=False):
     latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
-    summary = run_execution_preview(latest_dir)
+    summary = run_execution_preview(latest_dir, pre_submit_check=pre_submit_check)
     if make_chatgpt_report:
         _write_execution_bot_readiness_section(latest_dir, summary)
     print(f"Order intents: {latest_dir / 'order_intents.csv'}")

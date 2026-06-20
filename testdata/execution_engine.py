@@ -5,9 +5,11 @@ import pandas as pd
 
 try:
     from .paper_state_manager import read_pending_orders
+    from .pre_submit_gate import write_pre_submit_readiness_report
     from .risk_gate import evaluate_order_risk, write_risk_gate_reports
 except ImportError:
     from paper_state_manager import read_pending_orders
+    from pre_submit_gate import write_pre_submit_readiness_report
     from risk_gate import evaluate_order_risk, write_risk_gate_reports
 
 
@@ -301,8 +303,47 @@ def write_execution_preview_reports(latest_dir, order_intents, risk_report, brok
     return summary
 
 
-def run_execution_preview(latest_dir, max_new_orders_per_run=5):
+def _rewrite_execution_preview_summary(latest_path, summary):
+    preview = pd.DataFrame([summary])
+    preview.to_csv(latest_path / "execution_preview_report.csv", index=False)
+    lines = [
+        "# Execution Preview Report",
+        "",
+        f"- pending accepted orders count: {summary['pending_accepted_orders_count']}",
+        f"- order intents count: {summary['order_intents_count']}",
+        f"- risk passed count: {summary['risk_pass_count']}",
+        f"- blocked count: {summary['blocked_count']}",
+        f"- duplicate_intent_count: {summary['duplicate_intent_count']}",
+        f"- preview_duplicate_count: {summary['preview_duplicate_count']}",
+        f"- submit_duplicate_count: {summary['submit_duplicate_count']}",
+        f"- audit_log_rows: {summary['audit_log_rows']}",
+        f"- skipped_duplicate_count: {summary['skipped_duplicate_count']}",
+        "- idempotency_enabled: true",
+        "- preview_idempotency_enabled: true",
+        "- submit_idempotency_enabled: false",
+        "- preview_duplicates_do_not_block_future_submit: True",
+        "- message: Preview duplicate does not imply submit duplicate.",
+        f"- pre_submit_readiness_status: {summary.get('pre_submit_readiness_status', 'not_generated')}",
+        f"- blocking_checks_count: {summary.get('blocking_checks_count', 0)}",
+        f"- warning_checks_count: {summary.get('warning_checks_count', 0)}",
+        f"- pre_submit_readiness_report_path: {summary.get('pre_submit_readiness_report_path', 'reports/latest/pre_submit_readiness_report.md')}",
+        f"- would_submit count: {summary['would_submit_count']}",
+        "- broker_submit_enabled: false",
+        "- live_trading_enabled: false",
+        f"- execution_audit_log_path: {latest_path / 'execution_audit_log.csv'}",
+        f"- history_audit_log_path: {latest_path.parent / 'history' / 'execution_audit_log.csv'}",
+        "",
+    ]
+    (latest_path / "execution_preview_report.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def run_execution_preview(latest_dir, max_new_orders_per_run=5, pre_submit_check=False):
     pending = read_pending_orders(latest_dir)
     intents, accepted = build_order_intents(pending)
     risk = evaluate_order_risk(intents, accepted, max_new_orders_per_run=max_new_orders_per_run)
-    return write_execution_preview_reports(latest_dir, intents, risk, broker_submit_enabled=False)
+    summary = write_execution_preview_reports(latest_dir, intents, risk, broker_submit_enabled=False)
+    if pre_submit_check:
+        readiness = write_pre_submit_readiness_report(latest_dir, summary)
+        summary.update({key: value for key, value in readiness.items() if key != "pre_submit_checks"})
+        _rewrite_execution_preview_summary(Path(latest_dir), summary)
+    return summary

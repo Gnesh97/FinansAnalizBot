@@ -33,6 +33,7 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - `scripts/backup_latest_reports.bat`: latest raporlarini ve paper state dosyalarini yedekler.
 - `scripts/run_alpaca_check.bat`: Alpaca paper baglanti kontrolu, emir gondermez.
 - `scripts/run_execution_preview.bat`: execution preview dry-run; duplicate/idempotency kontrol eder, emir gondermez.
+- `scripts/run_pre_submit_check.bat`: pre-submit safety checklist uretir, emir gondermez.
 - `scripts/run_full_diagnostic.bat`: agir detayli kontrol.
 - `scripts/run_robustness.bat`: yavas research testi.
 - `scripts/run_tests.bat`: schema ve paper state smoke testleri.
@@ -97,6 +98,17 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - Hangi raporlari uretir?: `order_intents.csv`, `order_risk_check_report`, `execution_preview_report`, `execution_audit_log.csv`, `chatgpt_master_report` icinde Execution Bot Readiness.
 - ChatGPT'ye hangi dosya atilir?: `testdata/reports/latest/chatgpt_master_report.md`.
 
+## Pre-submit Check
+
+- Command name: Pre-submit check
+- Full command: `python universe_scanner.py --execution-preview --pre-submit-check --make-chatgpt-report`
+- Ne ise yarar?: Submit acilmadan once safety checklist, readiness BLOCK/WARNING/PASS satirlari ve master report ozeti uretir.
+- Ne zaman kullanilir?: Alpaca paper submit eklenmeden once hangi kosullarin eksik oldugunu gormek icin.
+- Guvenli mi?: Evet, report-only.
+- Emir gonderir mi?: Hayir. `submit_order` cagrilmaz, POST yoktur.
+- Hangi raporlari uretir?: Execution preview raporlari ve `pre_submit_readiness_report.md/csv`.
+- ChatGPT'ye hangi dosya atilir?: `testdata/reports/latest/chatgpt_master_report.md`.
+
 ## Robustness Research
 
 - Command name: Robustness research
@@ -125,6 +137,7 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - `--paper-report` broker'a emir gondermez.
 - `--alpaca-paper-check` sadece GET-only kontrol yapar; order gondermez.
 - `--execution-preview` dry-run/audit-only calisir; duplicate/idempotency kontrol eder, emir gondermez.
+- `--pre-submit-check` submit acilmadan once guvenlik checklist'i uretir; emir gondermez.
 - Alpaca submit/order POST yok.
 - `.bat` dosyalarinin hicbiri canli emir gondermez.
 - `run_alpaca_check.bat` sadece GET-only kontrol yapar.

@@ -233,6 +233,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Build local execution preview artifacts from accepted pending orders; never submits orders.",
     )
+    parser.add_argument(
+        "--pre-submit-check",
+        action="store_true",
+        help="Add pre-submit readiness checklist to execution preview; never submits orders.",
+    )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)
     data_folder = Path(__file__).resolve().parent / "hisseler"
@@ -242,10 +247,11 @@ if __name__ == "__main__":
             make_chatgpt_report=args.make_chatgpt_report,
         )
         raise SystemExit(0)
-    if args.execution_preview:
+    if args.execution_preview or args.pre_submit_check:
         run_execution_preview_check(
             str(data_folder),
             make_chatgpt_report=args.make_chatgpt_report,
+            pre_submit_check=args.pre_submit_check,
         )
         raise SystemExit(0)
     run_strategy_experiments(
