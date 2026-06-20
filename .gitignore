@@ -36,7 +36,9 @@ Thumbs.db
 *.log
 
 # Large/local data directories
-testdata/hisseler/
+testdata/hisseler*/
+testdata/reports/
+testdata/backups/
 testdata/hisseler2/
 testdata/hisseler3/
 data/
