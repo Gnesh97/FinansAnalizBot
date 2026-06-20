@@ -103,6 +103,30 @@ class RiskGateTest(unittest.TestCase):
         )
         report = evaluate_order_risk(intents)
         self.assertTrue(bool(report.iloc[0]["risk_pass"]))
+        self.assertEqual(report.iloc[0]["side"], "BUY")
+
+    def test_short_sell_blocks_when_short_disabled(self):
+        intents = pd.DataFrame(
+            [{"symbol": "AAPL", "strategy_name": "s", "side": "SHORT_SELL", "notional": 100, "liquidity_guard_pass": True}]
+        )
+        report = evaluate_order_risk(intents)
+        self.assertFalse(bool(report.iloc[0]["risk_pass"]))
+        self.assertIn("short_trading_disabled", report.iloc[0]["block_reason"])
+
+    def test_buy_to_cover_without_short_position_blocks(self):
+        intents = pd.DataFrame(
+            [{"symbol": "AAPL", "strategy_name": "s", "side": "BUY_TO_COVER", "notional": 100, "liquidity_guard_pass": True}]
+        )
+        report = evaluate_order_risk(intents, short_trading_enabled=True)
+        self.assertFalse(bool(report.iloc[0]["risk_pass"]))
+        self.assertIn("buy_to_cover_without_short_position", report.iloc[0]["block_reason"])
+
+    def test_sell_long_exit_passes(self):
+        intents = pd.DataFrame(
+            [{"symbol": "AAPL", "strategy_name": "s", "side": "SELL", "notional": 100, "liquidity_guard_pass": True}]
+        )
+        report = evaluate_order_risk(intents)
+        self.assertTrue(bool(report.iloc[0]["risk_pass"]))
 
     def test_max_new_orders_per_run_blocks_over_limit(self):
         intents = pd.DataFrame(

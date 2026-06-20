@@ -4,13 +4,15 @@ import hashlib
 import pandas as pd
 
 try:
+    from .config import SHORT_TRADING_ENABLED
     from .paper_state_manager import read_pending_orders
     from .pre_submit_gate import write_pre_submit_readiness_report
-    from .risk_gate import evaluate_order_risk, write_risk_gate_reports
+    from .risk_gate import evaluate_order_risk, normalize_order_side, write_risk_gate_reports
 except ImportError:
+    from config import SHORT_TRADING_ENABLED
     from paper_state_manager import read_pending_orders
     from pre_submit_gate import write_pre_submit_readiness_report
-    from risk_gate import evaluate_order_risk, write_risk_gate_reports
+    from risk_gate import evaluate_order_risk, normalize_order_side, write_risk_gate_reports
 
 
 ORDER_INTENT_COLUMNS = [
@@ -68,6 +70,13 @@ def execution_idempotency_key(idempotency_key, phase="PREVIEW"):
     return f"{str(phase).strip().upper()}:{str(idempotency_key).strip()}"
 
 
+def action_to_order_side(action):
+    action = str(action).strip().upper()
+    if action == "SELL":
+        return "SELL"
+    return "BUY"
+
+
 def _accepted_pending_next_open_orders(pending_orders):
     frame = pending_orders.copy() if pending_orders is not None else pd.DataFrame()
     if frame.empty:
@@ -84,7 +93,7 @@ def build_order_intents(pending_orders):
     rows = []
     for _, row in accepted.iterrows():
         action = str(row.get("action", "BUY")).strip().upper()
-        side = "sell" if action == "SELL" else "buy"
+        side = action_to_order_side(action)
         notional = pd.to_numeric(pd.Series([row.get("paper_position_notional", pd.NA)]), errors="coerce").iloc[0]
         order_intent_id = _stable_order_intent_id(row, side)
         idempotency_phase = "PREVIEW"
@@ -245,6 +254,22 @@ def write_execution_preview_reports(latest_dir, order_intents, risk_report, brok
         .str.contains("duplicate_preview_execution_idempotency_key|duplicate_execution_idempotency_key")
         .sum()
     ) if not risk_report.empty else 0
+    if not order_intents.empty and "side" in order_intents:
+        side_series = order_intents["side"].map(normalize_order_side)
+    else:
+        side_series = pd.Series(dtype=str)
+    short_mask = side_series.isin(["SHORT_SELL", "BUY_TO_COVER"])
+    short_intents_count = int(short_mask.sum())
+    short_keys = (
+        set(order_intents.loc[short_mask, "execution_idempotency_key"].astype(str))
+        if short_intents_count and "execution_idempotency_key" in order_intents
+        else set()
+    )
+    if short_keys and not risk_report.empty:
+        short_risk = risk_report[risk_report["execution_idempotency_key"].astype(str).isin(short_keys)]
+        short_blocked_count = int(len(short_risk) - short_risk["risk_pass"].astype(bool).sum())
+    else:
+        short_blocked_count = 0
     audit = _audit_rows(order_intents, risk_report, run_datetime, broker_submit_enabled=broker_submit_enabled)
     latest_audit_path, history_audit_path = _write_audit_logs(latest_path, audit)
     summary = {
@@ -271,6 +296,13 @@ def write_execution_preview_reports(latest_dir, order_intents, risk_report, brok
         "history_audit_log_path": "reports/history/execution_audit_log.csv",
         "submit_order_called": False,
         "post_request_used": False,
+        "short_trading_enabled": bool(SHORT_TRADING_ENABLED),
+        "short_strategy_enabled": False,
+        "short_intents_count": short_intents_count,
+        "short_blocked_count": short_blocked_count,
+        "short_submit_allowed": False,
+        "short_readiness_status": "BLOCK",
+        "borrow_check_available": False,
         "next_action": "Review risk blocks and keep broker_submit_enabled false until explicit approval.",
     }
     preview = pd.DataFrame([summary])
@@ -287,6 +319,10 @@ def write_execution_preview_reports(latest_dir, order_intents, risk_report, brok
         f"- submit_duplicate_count: {summary['submit_duplicate_count']}",
         f"- audit_log_rows: {summary['audit_log_rows']}",
         f"- skipped_duplicate_count: {summary['skipped_duplicate_count']}",
+        f"- short_intents_count: {summary.get('short_intents_count', 0)}",
+        f"- short_blocked_count: {summary.get('short_blocked_count', 0)}",
+        "- short_trading_enabled: false",
+        "- short_submit_allowed: false",
         "- idempotency_enabled: true",
         "- preview_idempotency_enabled: true",
         "- submit_idempotency_enabled: false",
@@ -318,6 +354,10 @@ def _rewrite_execution_preview_summary(latest_path, summary):
         f"- submit_duplicate_count: {summary['submit_duplicate_count']}",
         f"- audit_log_rows: {summary['audit_log_rows']}",
         f"- skipped_duplicate_count: {summary['skipped_duplicate_count']}",
+        f"- short_intents_count: {summary['short_intents_count']}",
+        f"- short_blocked_count: {summary['short_blocked_count']}",
+        "- short_trading_enabled: false",
+        "- short_submit_allowed: false",
         "- idempotency_enabled: true",
         "- preview_idempotency_enabled: true",
         "- submit_idempotency_enabled: false",
@@ -344,6 +384,12 @@ def run_execution_preview(latest_dir, max_new_orders_per_run=5, pre_submit_check
     summary = write_execution_preview_reports(latest_dir, intents, risk, broker_submit_enabled=False)
     if pre_submit_check:
         readiness = write_pre_submit_readiness_report(latest_dir, summary)
-        summary.update({key: value for key, value in readiness.items() if key != "pre_submit_checks"})
+        summary.update(
+            {
+                key: value
+                for key, value in readiness.items()
+                if key not in {"pre_submit_checks", "short_readiness_checks"}
+            }
+        )
         _rewrite_execution_preview_summary(Path(latest_dir), summary)
     return summary

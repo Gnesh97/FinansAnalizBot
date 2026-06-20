@@ -2,8 +2,14 @@ from pathlib import Path
 
 import pandas as pd
 
+try:
+    from .config import SHORT_TRADING_ENABLED
+except ImportError:
+    from config import SHORT_TRADING_ENABLED
+
 
 PRE_SUBMIT_COLUMNS = ["check_name", "status", "value", "required_value", "message"]
+SHORT_READINESS_COLUMNS = PRE_SUBMIT_COLUMNS
 
 
 def _bool_value(value):
@@ -31,6 +37,7 @@ def build_pre_submit_checks(summary):
     live_trading_enabled = _bool_value(summary.get("live_trading_enabled", False))
     submit_order_called = _bool_value(summary.get("submit_order_called", False))
     post_request_used = _bool_value(summary.get("post_request_used", False))
+    short_trading_enabled = _bool_value(summary.get("short_trading_enabled", SHORT_TRADING_ENABLED))
 
     rows = [
         _row(
@@ -126,8 +133,50 @@ def build_pre_submit_checks(summary):
             True,
             "Local paper state and execution preview counts must match.",
         ),
+        _row(
+            "short_submit_allowed",
+            "BLOCK" if not short_trading_enabled else "WARNING",
+            False,
+            False,
+            "Short submit must remain disabled until short readiness is explicitly enabled.",
+        ),
     ]
     return pd.DataFrame(rows, columns=PRE_SUBMIT_COLUMNS)
+
+
+def build_short_readiness_checks(summary):
+    short_trading_enabled = _bool_value(summary.get("short_trading_enabled", SHORT_TRADING_ENABLED))
+    short_intents_count = int(summary.get("short_intents_count", 0) or 0)
+    short_blocked_count = int(summary.get("short_blocked_count", 0) or 0)
+    borrow_check_available = _bool_value(summary.get("borrow_check_available", False))
+    rows = [
+        _row("short_trading_enabled", "PASS" if short_trading_enabled else "BLOCK", short_trading_enabled, True, "Short trading is disabled by config."),
+        _row("short_strategy_enabled", "BLOCK", False, False, "No short strategy is enabled or generated."),
+        _row("short_intents_count", "PASS" if short_intents_count == 0 else "BLOCK", short_intents_count, 0, "Short order intents must not be produced in the current build."),
+        _row("short_blocked_count", "PASS" if short_intents_count == 0 or short_blocked_count == short_intents_count else "BLOCK", short_blocked_count, short_intents_count, "Any short intent must be blocked while shorts are disabled."),
+        _row("borrow_check_available", "BLOCK" if not borrow_check_available else "PASS", borrow_check_available, True, "Borrow availability API is not wired in this readiness-only phase."),
+        _row("borrow_fee_known", "BLOCK", False, True, "Borrow fee is unknown; no borrow API call is made."),
+        _row("hard_to_borrow_known", "BLOCK", False, True, "Hard-to-borrow status is unknown; no borrow API call is made."),
+        _row("max_short_notional", "BLOCK", "placeholder", "configured", "Max short notional is a placeholder and not enabled."),
+        _row("short_position_exists", "BLOCK", "placeholder", "verified", "Short position state is a placeholder and no short state exists."),
+        _row("short_submit_allowed", "BLOCK", False, True, "Short submit is not allowed."),
+    ]
+    return pd.DataFrame(rows, columns=SHORT_READINESS_COLUMNS)
+
+
+def short_readiness_summary(checks):
+    blocking = int(checks["status"].eq("BLOCK").sum()) if checks is not None and not checks.empty else 1
+    warnings = int(checks["status"].eq("WARNING").sum()) if checks is not None and not checks.empty else 0
+    return {
+        "short_readiness_status": "BLOCK" if blocking > 0 else ("WARNING" if warnings > 0 else "PASS"),
+        "short_blocking_checks_count": blocking,
+        "short_warning_checks_count": warnings,
+        "short_trading_enabled": bool(SHORT_TRADING_ENABLED),
+        "short_submit_allowed": False,
+        "short_strategy_enabled": False,
+        "borrow_check_available": False,
+        "short_readiness_report_path": "reports/latest/short_readiness_report.md",
+    }
 
 
 def readiness_summary(checks):
@@ -190,7 +239,10 @@ def write_pre_submit_readiness_report(latest_dir, preview_summary):
     summary = build_summary_from_latest(latest_path, preview_summary)
     checks = build_pre_submit_checks(summary)
     result = readiness_summary(checks)
+    short_checks = build_short_readiness_checks({**summary, **result})
+    short_result = short_readiness_summary(short_checks)
     checks.to_csv(latest_path / "pre_submit_readiness_report.csv", index=False)
+    short_checks.to_csv(latest_path / "short_readiness_report.csv", index=False)
     lines = [
         "# Pre-submit Readiness Report",
         "",
@@ -207,4 +259,19 @@ def write_pre_submit_readiness_report(latest_dir, preview_summary):
         lines.append("| " + " | ".join(str(row.get(column, "")).replace("\n", " ") for column in PRE_SUBMIT_COLUMNS) + " |")
     lines.append("")
     (latest_path / "pre_submit_readiness_report.md").write_text("\n".join(lines), encoding="utf-8")
-    return {**result, "pre_submit_checks": checks}
+    short_lines = [
+        "# Short Readiness Report",
+        "",
+        f"- short_readiness_status: {short_result['short_readiness_status']}",
+        f"- short_trading_enabled: {short_result['short_trading_enabled']}",
+        f"- short_submit_allowed: {short_result['short_submit_allowed']}",
+        f"- borrow_check_available: {short_result['borrow_check_available']}",
+        "",
+        "| " + " | ".join(SHORT_READINESS_COLUMNS) + " |",
+        "| " + " | ".join(["---"] * len(SHORT_READINESS_COLUMNS)) + " |",
+    ]
+    for _, row in short_checks.iterrows():
+        short_lines.append("| " + " | ".join(str(row.get(column, "")).replace("\n", " ") for column in SHORT_READINESS_COLUMNS) + " |")
+    short_lines.append("")
+    (latest_path / "short_readiness_report.md").write_text("\n".join(short_lines), encoding="utf-8")
+    return {**result, **short_result, "pre_submit_checks": checks, "short_readiness_checks": short_checks}

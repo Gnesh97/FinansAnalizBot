@@ -5,6 +5,7 @@ DAILY_DATA_DIR = "testdata/hisseler/daily"
 RAW_1MIN_DATA_DIR = "testdata/hisseler/raw_1min"
 INTRADAY_TIMEFRAME = "130min"
 DAILY_TIMEFRAME = "1D"
+SHORT_TRADING_ENABLED = False
 
 STRATEGY_FAMILY_MAP = {
     "current_pullback_mean_reversion": "mean_reversion / pullback_in_uptrend",
@@ -34,6 +35,7 @@ __all__ = [
     "INTRADAY_DATA_DIR",
     "INTRADAY_TIMEFRAME",
     "RAW_1MIN_DATA_DIR",
+    "SHORT_TRADING_ENABLED",
     "STRATEGY_CACHE_VERSION",
     "STRATEGY_FAMILY_MAP",
     "get_strategy_family",

@@ -4591,6 +4591,15 @@ def _write_execution_bot_readiness_section(latest_dir, summary):
         "- post_request_used: false",
         f"- next action: {summary.get('next_action', 'Review execution preview outputs.')}",
         "",
+        "## Short Trading Readiness",
+        "",
+        f"- short_trading_enabled: {str(bool(summary.get('short_trading_enabled', False))).lower()}",
+        f"- short_readiness_status: {summary.get('short_readiness_status', 'BLOCK')}",
+        f"- short_submit_allowed: {str(bool(summary.get('short_submit_allowed', False))).lower()}",
+        "- short_strategy_enabled: false",
+        f"- borrow_check_available: {str(bool(summary.get('borrow_check_available', False))).lower()}",
+        "- next action: do not enable shorts until long paper workflow is validated",
+        "",
     ]
     if path.exists():
         text = path.read_text(encoding="utf-8")

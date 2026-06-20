@@ -1,6 +1,11 @@
 import unittest
 
-from testdata.pre_submit_gate import build_pre_submit_checks, readiness_summary
+from testdata.pre_submit_gate import (
+    build_pre_submit_checks,
+    build_short_readiness_checks,
+    readiness_summary,
+    short_readiness_summary,
+)
 
 
 class PreSubmitGateTest(unittest.TestCase):
@@ -21,6 +26,10 @@ class PreSubmitGateTest(unittest.TestCase):
             "alpaca_paper_connection_ok": True,
             "alpaca_positions_orders_ok": True,
             "local_state_execution_preview_match": True,
+            "short_trading_enabled": False,
+            "short_intents_count": 0,
+            "short_blocked_count": 0,
+            "borrow_check_available": False,
         }
         base.update(overrides)
         return base
@@ -49,6 +58,12 @@ class PreSubmitGateTest(unittest.TestCase):
         checks = build_pre_submit_checks(self._summary(risk_pass_count=5))
         self.assertEqual(checks[checks["check_name"].eq("risk_pass_count")].iloc[0]["status"], "PASS")
         self.assertFalse(readiness_summary(checks)["submit_allowed"])
+
+    def test_short_readiness_blocks_when_short_disabled(self):
+        checks = build_short_readiness_checks(self._summary(short_trading_enabled=False))
+        result = short_readiness_summary(checks)
+        self.assertEqual(result["short_readiness_status"], "BLOCK")
+        self.assertFalse(result["short_submit_allowed"])
 
 
 if __name__ == "__main__":
