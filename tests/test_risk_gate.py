@@ -15,6 +15,67 @@ class RiskGateTest(unittest.TestCase):
         )
         report = evaluate_order_risk(intents)
         self.assertIn("duplicate_symbol_order", report.iloc[1]["block_reason"])
+        self.assertIn("duplicate_symbol_order_same_run", report.iloc[1]["warning"])
+
+    def test_preview_duplicate_preview_blocks(self):
+        intents = pd.DataFrame(
+            [
+                {
+                    "order_intent_id": "id1",
+                    "idempotency_phase": "PREVIEW",
+                    "idempotency_key": "same",
+                    "execution_idempotency_key": "PREVIEW:same",
+                    "symbol": "AAPL",
+                    "strategy_name": "s",
+                    "side": "buy",
+                    "notional": 100,
+                    "liquidity_guard_pass": True,
+                },
+                {
+                    "order_intent_id": "id2",
+                    "idempotency_phase": "PREVIEW",
+                    "idempotency_key": "same",
+                    "execution_idempotency_key": "PREVIEW:same",
+                    "symbol": "MSFT",
+                    "strategy_name": "s",
+                    "side": "buy",
+                    "notional": 100,
+                    "liquidity_guard_pass": True,
+                },
+            ]
+        )
+        report = evaluate_order_risk(intents)
+        self.assertIn("duplicate_execution_idempotency_key", report.iloc[1]["block_reason"])
+
+    def test_preview_duplicate_future_submit_not_duplicate(self):
+        intents = pd.DataFrame(
+            [
+                {
+                    "order_intent_id": "id1",
+                    "idempotency_phase": "PREVIEW",
+                    "idempotency_key": "same",
+                    "execution_idempotency_key": "PREVIEW:same",
+                    "symbol": "AAPL",
+                    "strategy_name": "s",
+                    "side": "buy",
+                    "notional": 100,
+                    "liquidity_guard_pass": True,
+                },
+                {
+                    "order_intent_id": "id1",
+                    "idempotency_phase": "SUBMIT",
+                    "idempotency_key": "same",
+                    "execution_idempotency_key": "SUBMIT:same",
+                    "symbol": "MSFT",
+                    "strategy_name": "s",
+                    "side": "buy",
+                    "notional": 100,
+                    "liquidity_guard_pass": True,
+                },
+            ]
+        )
+        report = evaluate_order_risk(intents)
+        self.assertTrue(bool(report.iloc[1]["risk_pass"]))
 
     def test_liquidity_fail_blocks(self):
         intents = pd.DataFrame(
@@ -26,7 +87,19 @@ class RiskGateTest(unittest.TestCase):
 
     def test_valid_order_passes(self):
         intents = pd.DataFrame(
-            [{"symbol": "AAPL", "strategy_name": "s", "side": "buy", "notional": 100, "liquidity_guard_pass": True}]
+            [
+                {
+                    "order_intent_id": "id1",
+                    "idempotency_phase": "PREVIEW",
+                    "idempotency_key": "unique",
+                    "execution_idempotency_key": "PREVIEW:unique",
+                    "symbol": "AAPL",
+                    "strategy_name": "s",
+                    "side": "buy",
+                    "notional": 100,
+                    "liquidity_guard_pass": True,
+                }
+            ]
         )
         report = evaluate_order_risk(intents)
         self.assertTrue(bool(report.iloc[0]["risk_pass"]))

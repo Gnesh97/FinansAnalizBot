@@ -4,6 +4,10 @@ import pandas as pd
 
 
 RISK_REPORT_COLUMNS = [
+    "order_intent_id",
+    "idempotency_phase",
+    "idempotency_key",
+    "execution_idempotency_key",
     "symbol",
     "strategy_name",
     "side",
@@ -32,8 +36,15 @@ def evaluate_order_risk(order_intents, source_orders=None, max_new_orders_per_ru
             source_lookup[key] = row
 
     rows = []
-    seen = set()
+    seen_symbols = set()
+    seen_execution_keys = set()
     for index, intent in intents.reset_index(drop=True).iterrows():
+        order_intent_id = str(intent.get("order_intent_id", "")).strip()
+        idempotency_phase = str(intent.get("idempotency_phase", "PREVIEW")).strip().upper() or "PREVIEW"
+        idempotency_key = str(intent.get("idempotency_key", "")).strip()
+        execution_idempotency_key = str(
+            intent.get("execution_idempotency_key", f"{idempotency_phase}:{idempotency_key}")
+        ).strip()
         symbol = str(intent.get("symbol", "")).strip().upper()
         strategy_name = str(intent.get("strategy_name", "")).strip()
         source_row = source_lookup.get((symbol, strategy_name), intent)
@@ -48,9 +59,15 @@ def evaluate_order_risk(order_intents, source_orders=None, max_new_orders_per_ru
             block.append("missing_notional")
         elif float(notional) <= 0:
             block.append("notional_not_positive")
-        if symbol and symbol in seen:
+        if execution_idempotency_key and execution_idempotency_key in seen_execution_keys:
+            block.append("duplicate_execution_idempotency_key")
+        if execution_idempotency_key:
+            seen_execution_keys.add(execution_idempotency_key)
+        if symbol and symbol in seen_symbols:
             block.append("duplicate_symbol_order")
-        seen.add(symbol)
+            warning.append("duplicate_symbol_order_same_run")
+        if symbol:
+            seen_symbols.add(symbol)
         if index >= int(max_new_orders_per_run):
             block.append("max_new_orders_per_run_exceeded")
         if not _is_true(source_row.get("liquidity_guard_pass", intent.get("liquidity_guard_pass", False))):
@@ -67,6 +84,10 @@ def evaluate_order_risk(order_intents, source_orders=None, max_new_orders_per_ru
 
         rows.append(
             {
+                "order_intent_id": order_intent_id,
+                "idempotency_phase": idempotency_phase,
+                "idempotency_key": idempotency_key,
+                "execution_idempotency_key": execution_idempotency_key,
                 "symbol": symbol,
                 "strategy_name": strategy_name,
                 "side": side,

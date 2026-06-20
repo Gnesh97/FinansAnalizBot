@@ -32,6 +32,7 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - `scripts/run_paper_report.bat`: paper trading + ChatGPT master report.
 - `scripts/backup_latest_reports.bat`: latest raporlarini ve paper state dosyalarini yedekler.
 - `scripts/run_alpaca_check.bat`: Alpaca paper baglanti kontrolu, emir gondermez.
+- `scripts/run_execution_preview.bat`: execution preview dry-run; duplicate/idempotency kontrol eder, emir gondermez.
 - `scripts/run_full_diagnostic.bat`: agir detayli kontrol.
 - `scripts/run_robustness.bat`: yavas research testi.
 - `scripts/run_tests.bat`: schema ve paper state smoke testleri.
@@ -85,6 +86,17 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - Ortalama runtime: Ag baglantisina bagli; backtest calistirmadigi icin genelde kisa.
 - ChatGPT'ye hangi dosya atilir?: `testdata/reports/latest/chatgpt_master_report.md`.
 
+## Execution Preview Dry-run
+
+- Command name: Execution preview dry-run
+- Full command: `python universe_scanner.py --execution-preview --make-chatgpt-report`
+- Ne ise yarar?: Accepted pending orderlardan order intent, risk check, duplicate/idempotency kontrolu ve execution audit log uretir.
+- Ne zaman kullanilir?: Broker submit acilmadan once execution bot hazirligini dry-run olarak kontrol etmek icin.
+- Guvenli mi?: Evet, dry-run/audit-only.
+- Emir gonderir mi?: Hayir. `submit_order` cagrilmaz, POST yoktur.
+- Hangi raporlari uretir?: `order_intents.csv`, `order_risk_check_report`, `execution_preview_report`, `execution_audit_log.csv`, `chatgpt_master_report` icinde Execution Bot Readiness.
+- ChatGPT'ye hangi dosya atilir?: `testdata/reports/latest/chatgpt_master_report.md`.
+
 ## Robustness Research
 
 - Command name: Robustness research
@@ -112,6 +124,7 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - Alpaca live endpoint destegi yok.
 - `--paper-report` broker'a emir gondermez.
 - `--alpaca-paper-check` sadece GET-only kontrol yapar; order gondermez.
+- `--execution-preview` dry-run/audit-only calisir; duplicate/idempotency kontrol eder, emir gondermez.
 - Alpaca submit/order POST yok.
 - `.bat` dosyalarinin hicbiri canli emir gondermez.
 - `run_alpaca_check.bat` sadece GET-only kontrol yapar.
