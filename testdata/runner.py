@@ -25,6 +25,29 @@ try:
         calculate_buyhold_metrics,
         calculate_equal_weight_benchmark,
     )
+    from .report_schemas import (
+        ALPACA_ORDER_PREVIEW_COLUMNS,
+        DATA_PRECHECK_COLUMNS,
+        PAPER_ORDER_REVIEW_COLUMNS,
+        PAPER_PENDING_ORDERS_COLUMNS,
+        PAPER_SIGNAL_COLUMNS,
+        PAPER_TRADE_LOG_COLUMNS,
+        PIPELINE_HEALTH_COLUMNS,
+        REGRESSION_GUARD_COLUMNS,
+        ensure_columns,
+        validate_required_columns,
+    )
+    from .paper_state_manager import (
+        append_trade_log,
+        create_trade_log_template,
+        read_order_review,
+        read_pending_orders,
+        read_trade_log,
+        validate_paper_state,
+        write_order_review,
+        write_pending_orders,
+        write_trade_log,
+    )
     from .strategies.base import generate_strategy_signals
     from .strategies.cross_sectional_momentum import (
         _apply_cross_sectional_momentum_top_signals,
@@ -64,6 +87,29 @@ except ImportError:
         _write_compact_markdown,
         calculate_buyhold_metrics,
         calculate_equal_weight_benchmark,
+    )
+    from report_schemas import (
+        ALPACA_ORDER_PREVIEW_COLUMNS,
+        DATA_PRECHECK_COLUMNS,
+        PAPER_ORDER_REVIEW_COLUMNS,
+        PAPER_PENDING_ORDERS_COLUMNS,
+        PAPER_SIGNAL_COLUMNS,
+        PAPER_TRADE_LOG_COLUMNS,
+        PIPELINE_HEALTH_COLUMNS,
+        REGRESSION_GUARD_COLUMNS,
+        ensure_columns,
+        validate_required_columns,
+    )
+    from paper_state_manager import (
+        append_trade_log,
+        create_trade_log_template,
+        read_order_review,
+        read_pending_orders,
+        read_trade_log,
+        validate_paper_state,
+        write_order_review,
+        write_pending_orders,
+        write_trade_log,
     )
     from strategies.base import generate_strategy_signals
     from strategies.cross_sectional_momentum import (
@@ -250,8 +296,7 @@ def _alpaca_report_lines(summary):
 
 
 def _paper_order_review_decisions(latest_dir):
-    review_path = latest_dir / "paper_order_review.csv"
-    review = _load_paper_order_review(review_path)
+    review = _load_paper_order_review(Path(latest_dir) / "paper_order_review.csv")
     decisions = {}
     for _, row in review.iterrows():
         decisions[_paper_order_key(row)] = str(row.get("user_decision", "HOLD_REVIEW")).strip().upper()
@@ -274,20 +319,9 @@ def _paper_signal_lookup(latest_dir):
 
 def _write_alpaca_order_preview(latest_dir, output_path):
     pending_path = latest_dir / "paper_pending_orders.csv"
-    columns = [
-        "symbol",
-        "action",
-        "status",
-        "paper_position_notional",
-        "estimated_qty",
-        "order_type",
-        "time_in_force",
-        "would_submit",
-        "reason",
-    ]
     rows = []
     if pending_path.exists():
-        pending = pd.read_csv(pending_path)
+        pending = read_pending_orders(latest_dir)
         decisions = _paper_order_review_decisions(latest_dir)
         signal_lookup = _paper_signal_lookup(latest_dir)
         for _, row in pending.iterrows():
@@ -321,7 +355,7 @@ def _write_alpaca_order_preview(latest_dir, output_path):
                     "reason": "accepted_local_pending_order_pending_next_open",
                 }
             )
-    preview = pd.DataFrame(rows, columns=columns)
+    preview = ensure_columns(pd.DataFrame(rows), ALPACA_ORDER_PREVIEW_COLUMNS)
     preview.to_csv(output_path, index=False)
     return preview
 
@@ -2686,87 +2720,19 @@ def _paper_candidate_experiments(base_experiments):
 
 
 def _paper_signal_columns():
-    return [
-        "signal_scope",
-        "run_datetime",
-        "paper_strategy_mode",
-        "paper_portfolio_state",
-        "strategy_name",
-        "signal_date",
-        "symbol",
-        "action",
-        "fill_status",
-        "user_decision",
-        "reason",
-        "is_new_signal",
-        "already_in_position",
-        "paper_actionable",
-        "deferred_due_to_ramp_in",
-        "paper_rank",
-        "paper_max_new_positions_per_day",
-        "ranking_score",
-        "current_position_status",
-        "liquidity_guard_pass",
-        "liquidity_warning_reason",
-        "warning",
-        "estimated_dollar_volume",
-        "order_size_pct_of_dollar_volume",
-        "paper_capital_assumption",
-        "paper_position_notional",
-        "entry_price_reference",
-        "assumed_fill_rule",
-        "next_open_available",
-        "max_positions",
-    ]
+    return PAPER_SIGNAL_COLUMNS
 
 
 def _paper_trade_log_columns():
-    return [
-        "date",
-        "strategy_name",
-        "symbol",
-        "action",
-        "signal_date",
-        "signal_price",
-        "assumed_fill_price",
-        "fill_status",
-        "shares",
-        "notional",
-        "paper_capital",
-        "reason",
-        "liquidity_guard_pass",
-        "notes",
-    ]
+    return PAPER_TRADE_LOG_COLUMNS
 
 
 def _paper_pending_order_columns():
-    return [
-        "created_at",
-        "signal_date",
-        "strategy_name",
-        "symbol",
-        "action",
-        "paper_rank",
-        "ranking_score",
-        "paper_capital",
-        "paper_position_notional",
-        "liquidity_guard_pass",
-        "estimated_dollar_volume",
-        "order_size_pct_of_dollar_volume",
-        "status",
-        "user_decision",
-        "reason",
-        "pending_age_calendar_days",
-        "pending_age_trading_days",
-        "expected_next_open_date",
-        "pending_stale_warning",
-        "pending_stale_reason",
-        "notes",
-    ]
+    return PAPER_PENDING_ORDERS_COLUMNS
 
 
 def _paper_order_review_columns():
-    return ["symbol", "strategy_name", "action", "user_decision", "notes"]
+    return PAPER_ORDER_REVIEW_COLUMNS
 
 
 def _paper_main_strategy_name():
@@ -2992,6 +2958,7 @@ def _run_paper_signal_report(
 
 
 def _write_paper_signal_report(paper_report, csv_path, markdown_path):
+    paper_report = ensure_columns(paper_report, _paper_signal_columns(), fill_value=pd.NA)
     paper_report.to_csv(csv_path, index=False)
     liquidity_warnings_count = (
         int(paper_report["liquidity_warning_reason"].fillna("").astype(str).ne("").sum())
@@ -3025,16 +2992,7 @@ def _paper_order_key(row):
 
 
 def _load_paper_order_review(path):
-    if not path.exists():
-        return pd.DataFrame(columns=_paper_order_review_columns())
-    try:
-        review = pd.read_csv(path)
-    except Exception:
-        return pd.DataFrame(columns=_paper_order_review_columns())
-    for column in _paper_order_review_columns():
-        if column not in review:
-            review[column] = ""
-    return review[_paper_order_review_columns()]
+    return read_order_review(Path(path).parent)
 
 
 def _write_paper_order_review(paper_report, path):
@@ -3065,23 +3023,12 @@ def _write_paper_order_review(paper_report, path):
         subset=["symbol", "strategy_name", "action"],
         keep="first",
     )
-    review.to_csv(path, index=False)
-    return review
+    review = ensure_columns(review, _paper_order_review_columns())
+    return write_order_review(Path(path).parent, review)
 
 
 def _ensure_paper_trade_log(path):
-    if not path.exists():
-        pd.DataFrame(columns=_paper_trade_log_columns()).to_csv(path, index=False)
-    try:
-        log = pd.read_csv(path)
-    except Exception:
-        log = pd.DataFrame(columns=_paper_trade_log_columns())
-    for column in _paper_trade_log_columns():
-        if column not in log:
-            log[column] = pd.NA
-    log = log[_paper_trade_log_columns()]
-    log.to_csv(path, index=False)
-    return log
+    return write_trade_log(Path(path).parent, read_trade_log(Path(path).parent))
 
 
 def _next_open_for_signal(asset_data, symbol, signal_date):
@@ -3199,9 +3146,7 @@ def _apply_paper_order_review(paper_report, review, trade_log_path, asset_data):
         else:
             output.loc[index, "fill_status"] = "PENDING_NEXT_OPEN" if not bool(row.get("next_open_available", False)) else "PENDING_REVIEW"
     if new_log_rows:
-        log = pd.concat([log, pd.DataFrame(new_log_rows)], ignore_index=True)
-        log = log[_paper_trade_log_columns()]
-        log.to_csv(trade_log_path, index=False)
+        log = append_trade_log(Path(trade_log_path).parent, new_log_rows)
     return output, log
 
 
@@ -3303,9 +3248,7 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
         if order_id not in existing_orders:
             rows_to_append.append(carried)
     if log_rows:
-        log = pd.concat([log, pd.DataFrame(log_rows)], ignore_index=True)
-        log = log[_paper_trade_log_columns()]
-        log.to_csv(trade_log_path, index=False)
+        log = append_trade_log(Path(trade_log_path).parent, log_rows)
     if rows_to_append:
         output = pd.concat([output, pd.DataFrame(rows_to_append)], ignore_index=True)
     for column in _paper_signal_columns():
@@ -3346,11 +3289,12 @@ def _write_paper_pending_orders(paper_report, path, latest_daily_date="none"):
                 "notes": "",
             }
         )
-    pd.DataFrame(rows, columns=_paper_pending_order_columns()).to_csv(path, index=False)
+    pending = ensure_columns(pd.DataFrame(rows), _paper_pending_order_columns(), fill_value=pd.NA)
+    write_pending_orders(Path(path).parent, pending)
 
 
 def _write_paper_trade_log_template(path):
-    pd.DataFrame(columns=_paper_trade_log_columns()).to_csv(path, index=False)
+    create_trade_log_template(Path(path).parent)
 
 
 def _write_paper_trading_plan(path):
@@ -3704,7 +3648,7 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
         "",
         "## Symbol Checks",
         "",
-        _readable_table(pd.DataFrame(rows)),
+        _readable_table(ensure_columns(pd.DataFrame(rows), DATA_PRECHECK_COLUMNS)),
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -3767,28 +3711,7 @@ def _write_regression_guard_report(report, decision, latest_dir, path):
 
 
 def _pipeline_health_columns():
-    return [
-        "run_datetime",
-        "command",
-        "data_update_ran",
-        "latest_daily_date",
-        "latest_130min_date",
-        "latest_expected_market_session",
-        "stale_data_warning",
-        "pending_order_count",
-        "accepted_order_count",
-        "pending_next_open_count",
-        "filled_count_this_run",
-        "rejected_count_this_run",
-        "paper_trade_log_rows",
-        "strategy_metrics_changed",
-        "benchmark_changed",
-        "total_runtime_sec",
-        "cache_hit_count",
-        "cache_miss_count",
-        "status",
-        "warning_summary",
-    ]
+    return PIPELINE_HEALTH_COLUMNS
 
 
 def _write_pipeline_health_log(status, data_precheck, regression_guard, latest_dir, history_dir, command, total_runtime_sec, cache_summary):
@@ -3823,7 +3746,7 @@ def _write_pipeline_health_log(status, data_precheck, regression_guard, latest_d
         "status": health_status,
         "warning_summary": ";".join(sorted(set(str(w) for w in warning_parts if str(w)))) or "none",
     }
-    frame = pd.DataFrame([row], columns=_pipeline_health_columns())
+    frame = ensure_columns(pd.DataFrame([row]), _pipeline_health_columns())
     latest_path = Path(latest_dir) / "pipeline_health_log.csv"
     history_path = Path(history_dir) / "pipeline_health_log.csv"
     history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3838,6 +3761,8 @@ def _chatgpt_operational_health_section(operational_health):
     aging = operational_health.get("pending_aging_summary", {})
     data_precheck = operational_health.get("data_precheck", {})
     regression = operational_health.get("regression_guard", {})
+    schema_validation = operational_health.get("schema_validation", {})
+    paper_state = operational_health.get("paper_state_validation", {})
     health = operational_health.get("pipeline_health", {})
     return [
         "## Operational Health",
@@ -3847,6 +3772,10 @@ def _chatgpt_operational_health_section(operational_health):
         f"- pending order aging: max_calendar_days={aging.get('max_calendar_days', 0)}, max_trading_days={aging.get('max_trading_days', 0)}, stale_count={aging.get('stale_count', 0)}",
         f"- data precheck warnings: {', '.join(data_precheck.get('critical', []) + data_precheck.get('warnings', [])) or 'none'}",
         f"- regression guard status: {regression.get('status', 'not_generated')}",
+        f"- report_schema_validation_status: {schema_validation.get('status', 'not_generated')}",
+        f"- report_schema_validation_report_path: {schema_validation.get('path', 'reports/latest/report_schema_validation_report.md')}",
+        f"- paper_state_validation_status: {paper_state.get('status', 'not_generated')}",
+        f"- paper_state_validation_report_path: {paper_state.get('path', 'reports/latest/paper_state_validation_report.md')}",
         f"- next action: {operational_health.get('next_action', 'Review reports/latest/pipeline_health_log.csv.')}",
         "",
     ]
@@ -3869,6 +3798,93 @@ def _pending_aging_summary(path):
         "max_trading_days": int(trading.max()) if not trading.empty else 0,
         "stale_count": int(stale.sum()),
     }
+
+
+def _write_report_schema_validation_report(latest_dir, path):
+    checks = [
+        ("paper_signal_report.csv", PAPER_SIGNAL_COLUMNS),
+        ("paper_pending_orders.csv", PAPER_PENDING_ORDERS_COLUMNS),
+        ("paper_order_review.csv", PAPER_ORDER_REVIEW_COLUMNS),
+        ("paper_trade_log.csv", PAPER_TRADE_LOG_COLUMNS),
+        ("pipeline_health_log.csv", PIPELINE_HEALTH_COLUMNS),
+    ]
+    alpaca_preview = Path(latest_dir) / "alpaca_order_preview.csv"
+    if alpaca_preview.exists():
+        checks.append(("alpaca_order_preview.csv", ALPACA_ORDER_PREVIEW_COLUMNS))
+    rows = []
+    for filename, columns in checks:
+        file_path = Path(latest_dir) / filename
+        if not file_path.exists():
+            rows.append(
+                {
+                    "file": filename,
+                    "missing_columns": "file_missing",
+                    "extra_columns": "",
+                    "status": "WARNING",
+                }
+            )
+            continue
+        try:
+            frame = pd.read_csv(file_path, nrows=1)
+            validation = validate_required_columns(frame, columns)
+        except Exception as error:
+            rows.append(
+                {
+                    "file": filename,
+                    "missing_columns": f"read_error:{error}",
+                    "extra_columns": "",
+                    "status": "WARNING",
+                }
+            )
+            continue
+        missing = validation["missing_columns"]
+        extra = validation["extra_columns"]
+        rows.append(
+            {
+                "file": filename,
+                "missing_columns": ",".join(missing),
+                "extra_columns": ",".join(extra),
+                "status": "WARNING" if missing or extra else "OK",
+            }
+        )
+    status = "WARNING" if any(row["status"] == "WARNING" for row in rows) else "OK"
+    lines = [
+        "# Report Schema Validation Report",
+        "",
+        f"- status: {status}",
+        "- schema source: report_schemas.py",
+        "",
+        "## Checked Files",
+        "",
+        _readable_table(pd.DataFrame(rows)),
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return {"status": status, "rows": rows, "path": "reports/latest/report_schema_validation_report.md"}
+
+
+def _write_paper_state_validation_report(reports_dir, path):
+    validation = validate_paper_state(reports_dir)
+    lines = [
+        "# Paper State Validation Report",
+        "",
+        f"- pending_orders_exists: {validation['pending_orders_exists']}",
+        f"- order_review_exists: {validation['order_review_exists']}",
+        f"- trade_log_exists: {validation['trade_log_exists']}",
+        f"- pending_orders_rows: {validation['pending_orders_rows']}",
+        f"- order_review_rows: {validation['order_review_rows']}",
+        f"- trade_log_rows: {validation['trade_log_rows']}",
+        f"- schema_status: {validation['schema_status']}",
+        f"- status: {validation['status']}",
+        "",
+        "## Files",
+        "",
+        _readable_table(pd.DataFrame(validation["rows"])),
+        "",
+    ]
+    Path(path).write_text("\n".join(lines), encoding="utf-8")
+    validation["path"] = "reports/latest/paper_state_validation_report.md"
+    return validation
 
 
 def _chatgpt_daily_pipeline_status_section(daily_pipeline_status):
@@ -5348,12 +5364,22 @@ def run_strategy_experiments(
             total_runtime_sec,
             cache_summary,
         )
+        schema_validation_result = _write_report_schema_validation_report(
+            latest_dir,
+            latest_dir / "report_schema_validation_report.md",
+        )
+        paper_state_validation_result = _write_paper_state_validation_report(
+            latest_dir,
+            latest_dir / "paper_state_validation_report.md",
+        )
         aging_summary = _pending_aging_summary(latest_dir / "paper_pending_orders.csv")
         operational_health = {
             "pipeline_health": pipeline_health,
             "pending_aging_summary": aging_summary,
             "data_precheck": data_precheck_result or {"status": "OK", "warnings": [], "critical": []},
             "regression_guard": regression_guard_result,
+            "schema_validation": schema_validation_result,
+            "paper_state_validation": paper_state_validation_result,
             "next_action": daily_pipeline_status.get("next_action", "Review operational health reports."),
         }
     if write_performance_profile:
