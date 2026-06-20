@@ -5,6 +5,7 @@ En kolay gunluk kullanim: `scripts/run_daily_paper_pipeline.bat` dosyasina cift 
 - Bu script veri gunceller.
 - Paper report uretir.
 - Pending accepted emirlerde next open fill kontrol eder.
+- Operational health, data precheck ve regression guard raporlarini uretir.
 - ChatGPT'ye gonderilecek tek dosya: `testdata/reports/latest/chatgpt_master_report.md`
 - Canli emir gondermez.
 
@@ -67,6 +68,7 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - Guvenli mi?: Evet, tamamen local report-only.
 - Emir gonderir mi?: Hayir. `--paper-report` broker'a emir gondermez.
 - Hangi raporlari uretir?: `paper_signal_report`, `paper_pending_orders`, `paper_order_review`, `paper_trade_log`, `paper_trading_plan`, `chatgpt_master_report`.
+- Operational health raporlari: `pipeline_health_log.csv` son run saglik satiridir; `reports/history/pipeline_health_log.csv` tarihsel append logudur; `data_precheck_report.md` data integrity uyarilarini yazar; `regression_guard_report.md` baseline metrik sapmalarini kontrol eder.
 - Ortalama runtime: Basic backtest seviyesine yakin; paper dosyalari eklenir.
 - ChatGPT'ye hangi dosya atilir?: `testdata/reports/latest/chatgpt_master_report.md`.
 

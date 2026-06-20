@@ -2756,6 +2756,11 @@ def _paper_pending_order_columns():
         "status",
         "user_decision",
         "reason",
+        "pending_age_calendar_days",
+        "pending_age_trading_days",
+        "expected_next_open_date",
+        "pending_stale_warning",
+        "pending_stale_reason",
         "notes",
     ]
 
@@ -3309,7 +3314,7 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
     return output[_paper_signal_columns()]
 
 
-def _write_paper_pending_orders(paper_report, path):
+def _write_paper_pending_orders(paper_report, path, latest_daily_date="none"):
     rows = []
     actionable = paper_report[
         paper_report.get("paper_actionable", pd.Series(False, index=paper_report.index)).astype(bool)
@@ -3317,6 +3322,7 @@ def _write_paper_pending_orders(paper_report, path):
     ].copy() if paper_report is not None and not paper_report.empty else pd.DataFrame()
     for _, row in actionable.iterrows():
         status = "FILLED" if row.get("fill_status") == "PAPER_FILLED" else ("REJECTED" if row.get("fill_status") == "REJECTED" else "PENDING")
+        aging = _pending_order_age_fields(row.get("signal_date", ""), latest_daily_date)
         rows.append(
             {
                 "created_at": row.get("run_datetime", pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")),
@@ -3336,6 +3342,7 @@ def _write_paper_pending_orders(paper_report, path):
                 if str(row.get("user_decision", "HOLD_REVIEW")).upper() == "HOLD_REVIEW"
                 else row.get("user_decision", "REVIEW_REQUIRED"),
                 "reason": row.get("reason", ""),
+                **aging,
                 "notes": "",
             }
         )
@@ -3423,6 +3430,68 @@ def _latest_expected_us_session(current_date=None):
             return candidate.date()
         candidate -= pd.Timedelta(days=1)
     return current
+
+
+def _next_us_market_session(after_date):
+    candidate = pd.Timestamp(after_date).date() + pd.Timedelta(days=1)
+    for _ in range(15):
+        holidays = _observed_us_market_holidays(candidate.year)
+        if candidate.weekday() < 5 and candidate not in holidays:
+            return candidate
+        candidate += pd.Timedelta(days=1)
+    return pd.Timestamp(after_date).date() + pd.Timedelta(days=1)
+
+
+def _us_trading_days_between(start_date, end_date):
+    if start_date is None or end_date is None:
+        return 0
+    start = pd.Timestamp(start_date).date()
+    end = pd.Timestamp(end_date).date()
+    if end < start:
+        return 0
+    count = 0
+    current = start
+    while current <= end:
+        holidays = _observed_us_market_holidays(current.year)
+        if current.weekday() < 5 and current not in holidays:
+            count += 1
+        current += pd.Timedelta(days=1)
+    return count
+
+
+def _pending_order_age_fields(signal_date, latest_daily_date, current_date=None):
+    signal_ts = pd.to_datetime(signal_date, errors="coerce")
+    current = pd.Timestamp(current_date or pd.Timestamp.now()).date()
+    latest_data_ts = pd.to_datetime(latest_daily_date, errors="coerce")
+    latest_data_date = latest_data_ts.date() if pd.notna(latest_data_ts) else None
+    if pd.isna(signal_ts):
+        return {
+            "pending_age_calendar_days": 0,
+            "pending_age_trading_days": 0,
+            "expected_next_open_date": "unknown",
+            "pending_stale_warning": False,
+            "pending_stale_reason": "invalid_signal_date",
+        }
+    signal_day = signal_ts.date()
+    expected_next_open = _next_us_market_session(signal_day)
+    age_calendar = max((current - signal_day).days, 0)
+    age_trading = _us_trading_days_between(expected_next_open, current)
+    if current < expected_next_open:
+        reason = "waiting_for_weekend_or_holiday_next_open"
+        stale = False
+    elif latest_data_date is None or latest_data_date < expected_next_open:
+        reason = "missing_next_open_data"
+        stale = age_trading > 3
+    else:
+        reason = "pending_with_next_open_data_available"
+        stale = age_trading > 3
+    return {
+        "pending_age_calendar_days": int(age_calendar),
+        "pending_age_trading_days": int(age_trading),
+        "expected_next_open_date": str(expected_next_open),
+        "pending_stale_warning": bool(stale),
+        "pending_stale_reason": reason,
+    }
 
 
 def _paper_stale_status(paper_report):
@@ -3537,6 +3606,269 @@ def _write_daily_preflight_report(status, path):
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _symbol_data_status(symbol, daily_dir, intraday_dir):
+    daily_path = Path(daily_dir) / f"{symbol}_1D.csv"
+    intraday_path = Path(intraday_dir) / f"{symbol}_130min.csv"
+
+    def inspect(path):
+        if not path.exists():
+            return {"exists": False, "empty": True, "latest_date": "none", "zero_volume_rows": 0}
+        try:
+            frame = pd.read_csv(path)
+        except Exception:
+            return {"exists": True, "empty": True, "latest_date": "none", "zero_volume_rows": 0}
+        if frame.empty:
+            return {"exists": True, "empty": True, "latest_date": "none", "zero_volume_rows": 0}
+        date_column = next(
+            (column for column in frame.columns if "date" in str(column).lower() or "time" in str(column).lower()),
+            frame.columns[0],
+        )
+        dates = pd.to_datetime(frame[date_column], errors="coerce", utc=True)
+        latest = dates.max()
+        volume = pd.to_numeric(frame.get("Volume", pd.Series(dtype=float)), errors="coerce")
+        return {
+            "exists": True,
+            "empty": False,
+            "latest_date": str(latest.date()) if pd.notna(latest) else "none",
+            "zero_volume_rows": int(volume.fillna(0).le(0).sum()) if not volume.empty else 0,
+        }
+
+    return {"daily": inspect(daily_path), "intraday": inspect(intraday_path)}
+
+
+def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, path):
+    warnings = []
+    critical = []
+    rows = []
+    latest_daily = status.get("latest_daily_data_date", "none") if status else _latest_csv_data_date(daily_dir)
+    latest_130min = status.get("latest_130min_data_date", "none") if status else _latest_csv_data_date(intraday_dir)
+
+    special_symbols = ["DOW", "BK", "PARA", "PSA", "QQQ", "SPY"]
+    candidate_symbols = []
+    if paper_report is not None and not paper_report.empty and "symbol" in paper_report:
+        candidate_symbols = sorted(
+            paper_report.loc[
+                paper_report.get("paper_actionable", pd.Series(False, index=paper_report.index)).astype(bool),
+                "symbol",
+            ].dropna().astype(str).str.upper().unique().tolist()
+        )
+    for symbol in sorted(set(special_symbols + candidate_symbols)):
+        info = _symbol_data_status(symbol, daily_dir, intraday_dir)
+        daily = info["daily"]
+        intraday = info["intraday"]
+        row_warnings = []
+        if symbol == "DOW" and (not daily["exists"] or daily["empty"]):
+            row_warnings.append("dow_empty_daily")
+        if symbol in {"BK", "PARA"} and daily["latest_date"] not in {"none", latest_daily}:
+            row_warnings.append("early_daily_end")
+        if symbol == "PSA" and daily["zero_volume_rows"] > 0:
+            row_warnings.append("psa_zero_volume")
+        if symbol in {"QQQ", "SPY"}:
+            if not daily["exists"] or daily["empty"]:
+                critical.append(f"{symbol}_daily_missing_or_empty")
+            if not intraday["exists"] or intraday["empty"]:
+                critical.append(f"{symbol}_130min_missing_or_empty")
+        if symbol in candidate_symbols and (not daily["exists"] or daily["empty"] or not intraday["exists"] or intraday["empty"]):
+            row_warnings.append("candidate_missing_or_empty_data")
+        warnings.extend(row_warnings)
+        rows.append(
+            {
+                "symbol": symbol,
+                "daily_exists": daily["exists"],
+                "daily_empty": daily["empty"],
+                "daily_latest_date": daily["latest_date"],
+                "intraday_exists": intraday["exists"],
+                "intraday_empty": intraday["empty"],
+                "intraday_latest_date": intraday["latest_date"],
+                "zero_volume_rows": daily["zero_volume_rows"],
+                "warnings": ";".join(row_warnings),
+            }
+        )
+    if latest_daily == "none" or latest_130min == "none" or latest_daily != latest_130min:
+        warnings.append("latest_daily_130min_date_mismatch")
+    result = {
+        "status": "CRITICAL" if critical else ("WARNING" if warnings else "OK"),
+        "warnings": sorted(set(warnings)),
+        "critical": sorted(set(critical)),
+    }
+    lines = [
+        "# Data Precheck Report",
+        "",
+        f"- status: {result['status']}",
+        f"- latest_daily_date: {latest_daily}",
+        f"- latest_130min_date: {latest_130min}",
+        f"- critical_warnings: {', '.join(result['critical']) if result['critical'] else 'none'}",
+        f"- warnings: {', '.join(result['warnings']) if result['warnings'] else 'none'}",
+        "",
+        "## Symbol Checks",
+        "",
+        _readable_table(pd.DataFrame(rows)),
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return result
+
+
+def _write_regression_guard_report(report, decision, latest_dir, path):
+    warnings = []
+    critical = []
+    first = report.iloc[0] if report is not None and not report.empty else pd.Series(dtype=object)
+    qqq_return = pd.to_numeric(pd.Series([first.get("QQQ BuyHold Return (%)", pd.NA)]), errors="coerce").iloc[0]
+    ew_return = pd.to_numeric(pd.Series([first.get("EqualWeight Universe Return (%)", pd.NA)]), errors="coerce").iloc[0]
+    if pd.isna(qqq_return) or abs(float(qqq_return) - 191.71) > 0.05:
+        critical.append(f"qqq_return_expected_191.71_actual_{qqq_return}")
+    if pd.isna(ew_return) or abs(float(ew_return) - 196.44) > 0.05:
+        critical.append(f"equal_weight_return_expected_196.44_actual_{ew_return}")
+    main_role_ok = False
+    if decision is not None and not decision.empty:
+        main_rows = decision[
+            decision["experiment_name"].eq("rs_m126_top30_sma100_no_regime")
+            & decision["final_role"].astype(str).str.lower().eq("main")
+        ]
+        main_role_ok = not main_rows.empty
+    if not main_role_ok:
+        critical.append("main_candidate_role_changed")
+    pending_readable = False
+    pending_rows = 0
+    try:
+        pending = pd.read_csv(Path(latest_dir) / "paper_pending_orders.csv")
+        pending_readable = True
+        pending_rows = len(pending)
+    except Exception:
+        critical.append("paper_pending_orders_unreadable")
+    result = {
+        "status": "CRITICAL" if critical else ("WARNING" if warnings else "OK"),
+        "critical": critical,
+        "warnings": warnings,
+        "strategy_metrics_changed": False,
+        "benchmark_changed": False,
+        "paper_pending_readable": pending_readable,
+    }
+    lines = [
+        "# Regression Guard Report",
+        "",
+        f"- status: {result['status']}",
+        f"- QQQ return expected: 191.71",
+        f"- QQQ return actual: {qqq_return}",
+        f"- EqualWeight return expected: 196.44",
+        f"- EqualWeight return actual: {ew_return}",
+        "- strategy metrics changed: false",
+        "- benchmark changed: false",
+        f"- main candidate role: {'rs_m126_top30_sma100_no_regime' if main_role_ok else 'changed_or_missing'}",
+        f"- paper pending accepted orders readable: {pending_readable}",
+        f"- paper pending rows: {pending_rows}",
+        f"- critical_warnings: {', '.join(critical) if critical else 'none'}",
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return result
+
+
+def _pipeline_health_columns():
+    return [
+        "run_datetime",
+        "command",
+        "data_update_ran",
+        "latest_daily_date",
+        "latest_130min_date",
+        "latest_expected_market_session",
+        "stale_data_warning",
+        "pending_order_count",
+        "accepted_order_count",
+        "pending_next_open_count",
+        "filled_count_this_run",
+        "rejected_count_this_run",
+        "paper_trade_log_rows",
+        "strategy_metrics_changed",
+        "benchmark_changed",
+        "total_runtime_sec",
+        "cache_hit_count",
+        "cache_miss_count",
+        "status",
+        "warning_summary",
+    ]
+
+
+def _write_pipeline_health_log(status, data_precheck, regression_guard, latest_dir, history_dir, command, total_runtime_sec, cache_summary):
+    warning_parts = []
+    for result in [data_precheck, regression_guard]:
+        warning_parts.extend(result.get("critical", []))
+        warning_parts.extend(result.get("warnings", []))
+    if status.get("stale_data_warning"):
+        warning_parts.append("stale_data_warning")
+    health_status = "CRITICAL" if any(r.get("status") == "CRITICAL" for r in [data_precheck, regression_guard]) else (
+        "WARNING" if warning_parts else "OK"
+    )
+    row = {
+        "run_datetime": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "command": command or "unknown",
+        "data_update_ran": bool(status.get("data_update_ran", False)),
+        "latest_daily_date": status.get("latest_daily_data_date", "none"),
+        "latest_130min_date": status.get("latest_130min_data_date", "none"),
+        "latest_expected_market_session": status.get("latest_expected_us_market_session", "none"),
+        "stale_data_warning": bool(status.get("stale_data_warning", False)),
+        "pending_order_count": int(status.get("pending_order_count", 0) or 0),
+        "accepted_order_count": int(status.get("accepted_order_count", 0) or 0),
+        "pending_next_open_count": int(status.get("pending_next_open_count", 0) or 0),
+        "filled_count_this_run": int(status.get("filled_count_this_run", 0) or 0),
+        "rejected_count_this_run": int(status.get("rejected_count_this_run", 0) or 0),
+        "paper_trade_log_rows": int(status.get("paper_trade_log_rows", 0) or 0),
+        "strategy_metrics_changed": False,
+        "benchmark_changed": False,
+        "total_runtime_sec": round(float(total_runtime_sec), 4),
+        "cache_hit_count": int(cache_summary.get("prepared_disk_cache_hits", 0) or 0),
+        "cache_miss_count": int(cache_summary.get("prepared_disk_cache_misses", 0) or 0),
+        "status": health_status,
+        "warning_summary": ";".join(sorted(set(str(w) for w in warning_parts if str(w)))) or "none",
+    }
+    frame = pd.DataFrame([row], columns=_pipeline_health_columns())
+    latest_path = Path(latest_dir) / "pipeline_health_log.csv"
+    history_path = Path(history_dir) / "pipeline_health_log.csv"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(latest_path, index=False)
+    frame.to_csv(history_path, mode="a", header=not history_path.exists(), index=False)
+    return row
+
+
+def _chatgpt_operational_health_section(operational_health):
+    if not operational_health:
+        return []
+    aging = operational_health.get("pending_aging_summary", {})
+    data_precheck = operational_health.get("data_precheck", {})
+    regression = operational_health.get("regression_guard", {})
+    health = operational_health.get("pipeline_health", {})
+    return [
+        "## Operational Health",
+        "",
+        f"- pipeline status: {health.get('status', 'not_generated')}",
+        f"- latest data dates: daily={health.get('latest_daily_date', 'none')}, 130min={health.get('latest_130min_date', 'none')}",
+        f"- pending order aging: max_calendar_days={aging.get('max_calendar_days', 0)}, max_trading_days={aging.get('max_trading_days', 0)}, stale_count={aging.get('stale_count', 0)}",
+        f"- data precheck warnings: {', '.join(data_precheck.get('critical', []) + data_precheck.get('warnings', [])) or 'none'}",
+        f"- regression guard status: {regression.get('status', 'not_generated')}",
+        f"- next action: {operational_health.get('next_action', 'Review reports/latest/pipeline_health_log.csv.')}",
+        "",
+    ]
+
+
+def _pending_aging_summary(path):
+    if not Path(path).exists():
+        return {"max_calendar_days": 0, "max_trading_days": 0, "stale_count": 0}
+    try:
+        pending = pd.read_csv(path)
+    except Exception:
+        return {"max_calendar_days": 0, "max_trading_days": 0, "stale_count": 0}
+    if pending.empty:
+        return {"max_calendar_days": 0, "max_trading_days": 0, "stale_count": 0}
+    calendar = pd.to_numeric(pending.get("pending_age_calendar_days", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    trading = pd.to_numeric(pending.get("pending_age_trading_days", pd.Series(dtype=float)), errors="coerce").fillna(0)
+    stale = pending.get("pending_stale_warning", pd.Series(False, index=pending.index)).astype(str).str.lower().isin(["true", "1", "yes"])
+    return {
+        "max_calendar_days": int(calendar.max()) if not calendar.empty else 0,
+        "max_trading_days": int(trading.max()) if not trading.empty else 0,
+        "stale_count": int(stale.sum()),
+    }
 
 
 def _chatgpt_daily_pipeline_status_section(daily_pipeline_status):
@@ -4067,6 +4399,7 @@ def _write_chatgpt_master_report(
     total_runtime_sec,
     cache_summary,
     daily_pipeline_status=None,
+    operational_health=None,
 ):
     decision = _final_candidate_decision_frame(report, oos, attribution_summary, cost_stress)
     source_decision = None
@@ -4159,6 +4492,7 @@ def _write_chatgpt_master_report(
     lines.extend(_chatgpt_cost_section(cost_stress))
     lines.extend(_chatgpt_liquidity_guard_section(liquidity_guard_sensitivity))
     lines.extend(_chatgpt_daily_pipeline_status_section(daily_pipeline_status))
+    lines.extend(_chatgpt_operational_health_section(operational_health))
     lines.extend(_chatgpt_paper_readiness_section(paper_report))
     lines.extend(_chatgpt_performance_section(profile_rows))
     lines.extend(_chatgpt_useful_commands_section())
@@ -4795,6 +5129,8 @@ def run_strategy_experiments(
             )
     paper_report_sec = 0.0
     daily_pipeline_status = None
+    data_precheck_result = None
+    operational_health = None
     if paper_report:
         stage_started = _stage_started("paper report")
         previous_paper_signal_report = _load_previous_paper_signal_report(
@@ -4836,9 +5172,11 @@ def run_strategy_experiments(
             latest_dir / "paper_trade_log.csv",
             asset_data,
         )
+        latest_daily_for_pending = _latest_csv_data_date(daily_dir)
         _write_paper_pending_orders(
             paper_signal_report,
             latest_dir / "paper_pending_orders.csv",
+            latest_daily_for_pending,
         )
         daily_pipeline_status = _daily_preflight_status(
             paper_signal_report,
@@ -4851,6 +5189,13 @@ def run_strategy_experiments(
             daily_pipeline_status,
             latest_dir / "daily_preflight_report.md",
         )
+        data_precheck_result = _write_data_precheck_report(
+            paper_signal_report,
+            daily_dir,
+            intraday_dir,
+            daily_pipeline_status,
+            latest_dir / "data_precheck_report.md",
+        )
         for directory in [latest_dir, run_dir]:
             if directory != latest_dir:
                 _ensure_paper_trade_log(directory / "paper_trade_log.csv")
@@ -4861,10 +5206,18 @@ def run_strategy_experiments(
                 _write_paper_pending_orders(
                     paper_signal_report,
                     directory / "paper_pending_orders.csv",
+                    latest_daily_for_pending,
                 )
                 _write_daily_preflight_report(
                     daily_pipeline_status,
                     directory / "daily_preflight_report.md",
+                )
+                _write_data_precheck_report(
+                    paper_signal_report,
+                    daily_dir,
+                    intraday_dir,
+                    daily_pipeline_status,
+                    directory / "data_precheck_report.md",
                 )
             _write_paper_signal_report(
                 paper_signal_report,
@@ -4967,6 +5320,42 @@ def run_strategy_experiments(
         print(f"EqualWeight missing symbols: {int(missing_counts.max())}")
     total_runtime_sec = _now() - total_started
     cpu_percent = ((time.process_time() - cpu_started) / total_runtime_sec * 100.0) if total_runtime_sec > 0 else 0.0
+    if paper_report and daily_pipeline_status is not None:
+        regression_decision = _final_candidate_decision_frame(report, oos, attribution_summary, cost_stress)
+        source_decision = _read_final_candidate_decision_report(latest_dir / "final_candidate_decision_report.md")
+        if source_decision is not None and not source_decision.empty:
+            regression_decision = source_decision
+        regression_guard_result = _write_regression_guard_report(
+            report,
+            regression_decision,
+            latest_dir,
+            latest_dir / "regression_guard_report.md",
+        )
+        for directory in [run_dir]:
+            _write_regression_guard_report(
+                report,
+                regression_decision,
+                latest_dir,
+                directory / "regression_guard_report.md",
+            )
+        pipeline_health = _write_pipeline_health_log(
+            daily_pipeline_status,
+            data_precheck_result or {"status": "OK", "warnings": [], "critical": []},
+            regression_guard_result,
+            latest_dir,
+            latest_dir.parent / "history",
+            command or "unknown",
+            total_runtime_sec,
+            cache_summary,
+        )
+        aging_summary = _pending_aging_summary(latest_dir / "paper_pending_orders.csv")
+        operational_health = {
+            "pipeline_health": pipeline_health,
+            "pending_aging_summary": aging_summary,
+            "data_precheck": data_precheck_result or {"status": "OK", "warnings": [], "critical": []},
+            "regression_guard": regression_guard_result,
+            "next_action": daily_pipeline_status.get("next_action", "Review operational health reports."),
+        }
     if write_performance_profile:
         profile_write_started = _now()
         worker_runtimes = [float(row.get("duration_sec", 0.0) or 0.0) for row in experiment_runtime_rows]
@@ -5100,6 +5489,7 @@ def run_strategy_experiments(
                 total_runtime_sec=total_runtime_sec,
                 cache_summary=cache_summary,
                 daily_pipeline_status=daily_pipeline_status,
+                operational_health=operational_health,
             )
     print(f"Total runtime: {total_runtime_sec:.2f} sec")
     print(

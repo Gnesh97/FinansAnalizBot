@@ -20,6 +20,9 @@ echo.
 echo [3/3] Done.
 echo Master report: reports\latest\chatgpt_master_report.md
 echo Preflight report: reports\latest\daily_preflight_report.md
+echo Data precheck report: reports\latest\data_precheck_report.md
+echo Regression guard report: reports\latest\regression_guard_report.md
+echo Pipeline health log: reports\latest\pipeline_health_log.csv
 pause
 exit /b 0
 
