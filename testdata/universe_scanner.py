@@ -3,13 +3,13 @@ try:
     import sys
     from pathlib import Path
 
-    from .runner import run_alpaca_paper_check, run_strategy_experiments, run_universe_scanner
+    from .runner import run_alpaca_paper_check, run_execution_preview_check, run_strategy_experiments, run_universe_scanner
 except ImportError:
     import argparse
     import sys
     from pathlib import Path
 
-    from runner import run_alpaca_paper_check, run_strategy_experiments, run_universe_scanner
+    from runner import run_alpaca_paper_check, run_execution_preview_check, run_strategy_experiments, run_universe_scanner
 
 
 VALIDATION_EXPERIMENTS = [
@@ -228,11 +228,22 @@ if __name__ == "__main__":
         action="store_true",
         help="GET-only Alpaca paper account/positions/orders check plus dry-run preview; never submits orders.",
     )
+    parser.add_argument(
+        "--execution-preview",
+        action="store_true",
+        help="Build local execution preview artifacts from accepted pending orders; never submits orders.",
+    )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)
     data_folder = Path(__file__).resolve().parent / "hisseler"
     if args.alpaca_paper_check:
         run_alpaca_paper_check(
+            str(data_folder),
+            make_chatgpt_report=args.make_chatgpt_report,
+        )
+        raise SystemExit(0)
+    if args.execution_preview:
+        run_execution_preview_check(
             str(data_folder),
             make_chatgpt_report=args.make_chatgpt_report,
         )

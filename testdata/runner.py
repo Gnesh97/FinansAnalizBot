@@ -48,6 +48,7 @@ try:
         write_pending_orders,
         write_trade_log,
     )
+    from .execution_engine import run_execution_preview
     from .strategies.base import generate_strategy_signals
     from .strategies.cross_sectional_momentum import (
         _apply_cross_sectional_momentum_top_signals,
@@ -111,6 +112,7 @@ except ImportError:
         write_pending_orders,
         write_trade_log,
     )
+    from execution_engine import run_execution_preview
     from strategies.base import generate_strategy_signals
     from strategies.cross_sectional_momentum import (
         _apply_cross_sectional_momentum_top_signals,
@@ -4555,6 +4557,45 @@ def _chatgpt_useful_commands_section():
         "- Robustness research: `scripts/run_robustness.ps1`",
         "",
     ]
+
+
+def _write_execution_bot_readiness_section(latest_dir, summary):
+    path = Path(latest_dir) / "chatgpt_master_report.md"
+    section = [
+        "## Execution Bot Readiness",
+        "",
+        f"- execution_preview_status: {summary.get('execution_preview_status', 'not_generated')}",
+        "- broker_mode: paper/dry-run",
+        "- broker_submit_enabled: false",
+        "- live_trading_enabled: false",
+        f"- order_intents_count: {int(summary.get('order_intents_count', 0) or 0)}",
+        f"- risk_pass_count: {int(summary.get('risk_pass_count', 0) or 0)}",
+        f"- blocked_count: {int(summary.get('blocked_count', 0) or 0)}",
+        f"- execution_preview_report_path: {summary.get('execution_preview_report_path', 'reports/latest/execution_preview_report.md')}",
+        f"- next action: {summary.get('next_action', 'Review execution preview outputs.')}",
+        "",
+    ]
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+        marker = "## Execution Bot Readiness"
+        if marker in text:
+            text = text[: text.index(marker)].rstrip() + "\n\n"
+    else:
+        text = "# ChatGPT Master Report\n\n"
+    path.write_text(text.rstrip() + "\n\n" + "\n".join(section), encoding="utf-8")
+
+
+def run_execution_preview_check(data_folder="hisseler", report_output_dir="reports", make_chatgpt_report=False):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    summary = run_execution_preview(latest_dir)
+    if make_chatgpt_report:
+        _write_execution_bot_readiness_section(latest_dir, summary)
+    print(f"Order intents: {latest_dir / 'order_intents.csv'}")
+    print(f"Risk check report: {latest_dir / 'order_risk_check_report.md'}")
+    print(f"Execution preview report: {latest_dir / 'execution_preview_report.md'}")
+    print("broker_submit_enabled: false")
+    print("live_trading_enabled: false")
+    return summary
 
 
 def _run_liquidity_guard_sensitivity_report(
