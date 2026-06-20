@@ -34,6 +34,7 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - `scripts/run_alpaca_check.bat`: Alpaca paper baglanti kontrolu, emir gondermez.
 - `scripts/run_full_diagnostic.bat`: agir detayli kontrol.
 - `scripts/run_robustness.bat`: yavas research testi.
+- `scripts/run_tests.bat`: schema ve paper state smoke testleri.
 
 ## Basic Backtest
 
@@ -95,6 +96,15 @@ Not: `.bat` ve PowerShell scriptleri repo kokunden calistirilir. Dogrudan `pytho
 - Hangi raporlari uretir?: Full raporlar, robustness raporlari, `chatgpt_master_report`.
 - Ortalama runtime: Yavas; makine, cache ve worker sayisina ciddi baglidir.
 - ChatGPT'ye hangi dosya atilir?: `testdata/reports/latest/chatgpt_master_report.md`.
+
+## Test Suite
+
+- Command name: Lightweight tests
+- Full command: `scripts/run_tests.bat`
+- Ne ise yarar?: `report_schemas.py` ve `paper_state_manager.py` icin smoke/regression testleri calistirir.
+- Ne zaman kullanilir?: Schema veya paper state read/write helper degisikliklerinden sonra.
+- Guvenli mi?: Evet, tempfile kullanir; strategy logic calistirmaz.
+- Emir gonderir mi?: Hayir.
 
 ## Guvenlik notlari
 

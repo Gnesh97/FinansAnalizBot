@@ -4539,6 +4539,7 @@ def _chatgpt_useful_commands_section():
         "### Double-click BAT",
         "",
         "- Daily paper pipeline: `scripts/run_daily_paper_pipeline.bat`",
+        "- Test suite: `scripts/run_tests.bat`",
         "- Paper report only: `scripts/run_paper_report.bat`",
         "- Basic backtest: `scripts/run_basic.bat`",
         "- Alpaca paper check: `scripts/run_alpaca_check.bat`",
