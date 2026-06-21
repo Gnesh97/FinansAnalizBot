@@ -55,13 +55,20 @@ class DataPrecheckActionsTest(unittest.TestCase):
             )
 
             actions = result["recommended_actions"]
+            policy_decisions = result["policy_decisions"]
             warnings = {(item["symbol"], item["warning"]) for item in actions}
             self.assertIn(("DOW", "dow_empty_daily"), warnings)
             self.assertIn(("BK", "early_daily_end"), warnings)
             self.assertIn(("PSA", "psa_zero_volume"), warnings)
+            policies = {(item["symbol"], item["policy_status"]) for item in policy_decisions}
+            self.assertIn(("BK", "BLOCK_UNTIL_POLICY_ACK"), policies)
+            self.assertIn(("PSA", "BLOCK_UNTIL_POLICY_ACK"), policies)
+            self.assertIn(("DOW", "BLOCK_UNTIL_DATA_FIXED"), policies)
             report_text = (root / "data_precheck_report.md").read_text(encoding="utf-8")
             self.assertIn("## Recommended Actions", report_text)
+            self.assertIn("## Data Policy Decisions", report_text)
             self.assertIn("recommended_action_count: 3", report_text)
+            self.assertIn("policy_decision_count: 3", report_text)
 
 
 if __name__ == "__main__":

@@ -3673,6 +3673,34 @@ def _data_precheck_actions(rows, latest_daily, latest_130min):
     return actions
 
 
+def _data_precheck_policy_decisions(actions):
+    decisions = []
+    for action in actions:
+        warning = str(action.get("warning", "")).strip()
+        symbol = str(action.get("symbol", "")).strip().upper()
+        if warning == "early_daily_end":
+            policy = "BLOCK_UNTIL_POLICY_ACK"
+            recommendation = "confirm_delisted_renamed_or_remove_from_trading_universe"
+        elif warning == "psa_zero_volume":
+            policy = "BLOCK_UNTIL_POLICY_ACK"
+            recommendation = "inspect_vendor_row_then_allow_or_repair_source"
+        elif warning in {"dow_empty_daily", "candidate_missing_or_empty_data", "latest_daily_130min_date_mismatch"}:
+            policy = "BLOCK_UNTIL_DATA_FIXED"
+            recommendation = action.get("action", "refresh_data")
+        else:
+            policy = "REVIEW_REQUIRED"
+            recommendation = action.get("action", "review")
+        decisions.append(
+            {
+                "symbol": symbol,
+                "warning": warning,
+                "policy_status": policy,
+                "recommended_policy_action": recommendation,
+            }
+        )
+    return decisions
+
+
 def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, path):
     warnings = []
     critical = []
@@ -3724,11 +3752,13 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
     if latest_daily == "none" or latest_130min == "none" or latest_daily != latest_130min:
         warnings.append("latest_daily_130min_date_mismatch")
     actions = _data_precheck_actions(rows, latest_daily, latest_130min)
+    policy_decisions = _data_precheck_policy_decisions(actions)
     result = {
         "status": "CRITICAL" if critical else ("WARNING" if warnings else "OK"),
         "warnings": sorted(set(warnings)),
         "critical": sorted(set(critical)),
         "recommended_actions": actions,
+        "policy_decisions": policy_decisions,
     }
     lines = [
         "# Data Precheck Report",
@@ -3739,6 +3769,7 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
         f"- critical_warnings: {', '.join(result['critical']) if result['critical'] else 'none'}",
         f"- warnings: {', '.join(result['warnings']) if result['warnings'] else 'none'}",
         f"- recommended_action_count: {len(actions)}",
+        f"- policy_decision_count: {len(policy_decisions)}",
         "",
         "## Symbol Checks",
         "",
@@ -3747,6 +3778,10 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
         "## Recommended Actions",
         "",
         _readable_table(pd.DataFrame(actions)) if actions else "none",
+        "",
+        "## Data Policy Decisions",
+        "",
+        _readable_table(pd.DataFrame(policy_decisions)) if policy_decisions else "none",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
