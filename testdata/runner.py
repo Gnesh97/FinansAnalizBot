@@ -141,6 +141,31 @@ except ImportError:
         _run_relative_strength_rotation_backtest,
     )
 
+try:
+    from .state_store import (
+        init_state_db,
+        append_pipeline_run,
+        append_paper_orders,
+        append_paper_trades,
+        append_order_intents,
+        append_execution_audit,
+        append_pre_submit_checks,
+        append_short_readiness_checks,
+        get_state_summary
+    )
+except ImportError:
+    from state_store import (
+        init_state_db,
+        append_pipeline_run,
+        append_paper_orders,
+        append_paper_trades,
+        append_order_intents,
+        append_execution_audit,
+        append_pre_submit_checks,
+        append_short_readiness_checks,
+        get_state_summary
+    )
+
 
 def run_universe_scanner(*args, **kwargs):
     raise NotImplementedError("run_universe_scanner is not part of the modular validation runner.")
@@ -3974,7 +3999,8 @@ def _chatgpt_operational_health_section(operational_health):
     schema_validation = operational_health.get("schema_validation", {})
     paper_state = operational_health.get("paper_state_validation", {})
     health = operational_health.get("pipeline_health", {})
-    return [
+    
+    ret = [
         "## Operational Health",
         "",
         f"- pipeline status: {health.get('status', 'not_generated')}",
@@ -3986,9 +4012,27 @@ def _chatgpt_operational_health_section(operational_health):
         f"- report_schema_validation_report_path: {schema_validation.get('path', 'reports/latest/report_schema_validation_report.md')}",
         f"- paper_state_validation_status: {paper_state.get('status', 'not_generated')}",
         f"- paper_state_validation_report_path: {paper_state.get('path', 'reports/latest/paper_state_validation_report.md')}",
+    ]
+    
+    sqlite = operational_health.get("sqlite", {})
+    if sqlite:
+        db_rel_path = "testdata/state/trading_state.sqlite3"
+        report_rel_path = "reports/latest/sqlite_state_report.md"
+        ret.extend([
+            f"- sqlite_state_status: {sqlite.get('status', 'WARNING')}",
+            f"- sqlite_db_path: {db_rel_path}",
+            f"- sqlite_state_report_path: {report_rel_path}",
+            f"- latest_run_id: {sqlite.get('latest_run_id') or 'none'}",
+            f"- paper_orders_count: {sqlite.get('paper_orders_count', 0)}",
+            f"- paper_trades_count: {sqlite.get('paper_trades_count', 0)}",
+            f"- execution_audit_count: {sqlite.get('execution_audit_count', 0)}"
+        ])
+        
+    ret.extend([
         f"- next action: {operational_health.get('next_action', 'Review reports/latest/pipeline_health_log.csv.')}",
         "",
-    ]
+    ])
+    return ret
 
 
 def _pending_aging_summary(path):
@@ -4614,6 +4658,44 @@ def _chatgpt_performance_section(profile_rows):
     ]
 
 
+def _write_sqlite_state_report(latest_dir, db_path):
+    try:
+        summary = get_state_summary(str(db_path))
+        
+        # Write CSV
+        csv_path = latest_dir / "sqlite_state_report.csv"
+        csv_lines = ["metric,value"]
+        for k, v in summary.items():
+            if k != "error_msg":
+                csv_lines.append(f"{k},{v}")
+        csv_path.write_text("\n".join(csv_lines), encoding="utf-8")
+        
+        # Write MD
+        md_path = latest_dir / "sqlite_state_report.md"
+        md_lines = [
+            "# SQLite State Report",
+            "",
+            f"- db_path: {summary.get('db_path')}",
+            f"- db_exists: {summary.get('db_exists')}",
+            f"- table_count: {summary.get('table_count')}",
+            f"- pipeline_runs_count: {summary.get('pipeline_runs_count')}",
+            f"- paper_orders_count: {summary.get('paper_orders_count')}",
+            f"- paper_trades_count: {summary.get('paper_trades_count')}",
+            f"- order_intents_count: {summary.get('order_intents_count')}",
+            f"- execution_audit_count: {summary.get('execution_audit_count')}",
+            f"- readiness_checks_count: {summary.get('readiness_checks_count')}",
+            f"- latest_run_id: {summary.get('latest_run_id')}",
+            f"- status: {summary.get('status')}",
+        ]
+        if summary.get("error_msg"):
+            md_lines.extend(["", f"Warning: {summary.get('error_msg')}"])
+        md_path.write_text("\n".join(md_lines), encoding="utf-8")
+        
+        return summary
+    except Exception as e:
+        print(f"WARNING: _write_sqlite_state_report failed: {e}")
+        return {"status": "WARNING", "error_msg": str(e)}
+
 def _write_chatgpt_master_report(
     report,
     audit,
@@ -4635,6 +4717,13 @@ def _write_chatgpt_master_report(
     daily_pipeline_status=None,
     operational_health=None,
 ):
+    latest_report_dir = Path(final_decision_path).parent if final_decision_path else Path(output_path).parent
+    sqlite_db_path = latest_report_dir.parent.parent / "state" / "trading_state.sqlite3"
+    sqlite_summary = get_state_summary(str(sqlite_db_path))
+    if operational_health is None:
+        operational_health = {}
+    operational_health["sqlite"] = sqlite_summary
+
     decision = _final_candidate_decision_frame(report, oos, attribution_summary, cost_stress)
     source_decision = None
     if oos is None or attribution_summary is None or cost_stress is None:
@@ -4910,6 +4999,71 @@ def run_execution_preview_check(data_folder="hisseler", report_output_dir="repor
     print(f"Execution preview report: {latest_dir / 'execution_preview_report.md'}")
     print("broker_submit_enabled: false")
     print("live_trading_enabled: false")
+
+    # SQLite mirror block
+    db_path = resolve_project_path("state/trading_state.sqlite3", data_folder)
+    run_id = f"run_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    try:
+        init_state_db(str(db_path))
+        
+        # 1. Pipeline run
+        mode_str = "pre-submit-check" if pre_submit_check else "execution-preview"
+        append_pipeline_run(
+            str(db_path),
+            run_id=run_id,
+            run_datetime=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+            command=f"python bot.py --mode {mode_str}",
+            mode=mode_str,
+            status="SUCCESS",
+            strategy_metrics_changed=False,
+            benchmark_changed=False,
+            regression_guard_status="OK",
+            total_runtime_sec=0.0
+        )
+        
+        # 2. Order intents
+        intents_path = latest_dir / "order_intents.csv"
+        if intents_path.exists():
+            try:
+                intents_df = pd.read_csv(intents_path)
+                append_order_intents(str(db_path), run_id, intents_df)
+            except Exception as e_int:
+                print(f"WARNING: SQLite append_order_intents failed to read CSV: {e_int}")
+                
+        # 3. Execution audit
+        audit_path = latest_dir / "execution_audit_log.csv"
+        if audit_path.exists():
+            try:
+                audit_df = pd.read_csv(audit_path)
+                append_execution_audit(str(db_path), run_id, audit_df)
+            except Exception as e_aud:
+                print(f"WARNING: SQLite append_execution_audit failed to read CSV: {e_aud}")
+                
+        # 4. Pre-submit safety checks
+        pre_submit_path = latest_dir / "pre_submit_readiness_report.csv"
+        if pre_submit_path.exists():
+            try:
+                pre_submit_df = pd.read_csv(pre_submit_path)
+                append_pre_submit_checks(str(db_path), run_id, pre_submit_df)
+            except Exception as e_pre:
+                print(f"WARNING: SQLite append_pre_submit_checks failed to read CSV: {e_pre}")
+                
+        # 5. Short readiness checks
+        short_path = latest_dir / "short_readiness_report.csv"
+        if short_path.exists():
+            try:
+                short_df = pd.read_csv(short_path)
+                append_short_readiness_checks(str(db_path), run_id, short_df)
+            except Exception as e_sh:
+                print(f"WARNING: SQLite append_short_readiness_checks failed to read CSV: {e_sh}")
+                
+        # Write state report files
+        _write_sqlite_state_report(latest_dir, db_path)
+        
+    except Exception as e_sql:
+        print(f"WARNING: SQLite mirror execution failed: {e_sql}")
+
     return summary
 
 
@@ -5852,6 +6006,94 @@ def run_strategy_experiments(
         "run_robustness": run_robustness,
         "paper_report": paper_report,
     }
+    # SQLite mirror block
+    db_path = resolve_project_path("state/trading_state.sqlite3", data_folder)
+    run_id = f"run_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    try:
+        init_state_db(str(db_path))
+        
+        # 1. Pipeline run
+        append_pipeline_run(
+            str(db_path),
+            run_id=run_id,
+            run_datetime=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+            command=command or "python bot.py --mode local-paper",
+            mode=report_mode or "local-paper",
+            status="SUCCESS",
+            strategy_metrics_changed=False,
+            benchmark_changed=False,
+            regression_guard_status=operational_health.get("regression_guard", {}).get("status", "OK") if operational_health else "OK",
+            total_runtime_sec=float(total_runtime_sec or 0)
+        )
+        
+        # 2. Paper orders
+        orders_path = latest_dir / "paper_pending_orders.csv"
+        if orders_path.exists():
+            try:
+                orders_df = pd.read_csv(orders_path)
+                append_paper_orders(str(db_path), run_id, orders_df)
+            except Exception as e_ord:
+                print(f"WARNING: SQLite append_paper_orders failed to read CSV: {e_ord}")
+                
+        # 3. Paper trades
+        trades_path = latest_dir / "paper_trade_log.csv"
+        if trades_path.exists():
+            try:
+                trades_df = pd.read_csv(trades_path)
+                append_paper_trades(str(db_path), run_id, trades_df)
+            except Exception as e_trd:
+                print(f"WARNING: SQLite append_paper_trades failed to read CSV: {e_trd}")
+                
+        # 4. Pipeline health/readiness checks
+        if operational_health:
+            checks = []
+            if "data_precheck" in operational_health:
+                pre = operational_health["data_precheck"]
+                checks.append({
+                    "check_name": "data_precheck",
+                    "status": pre.get("status", "WARNING"),
+                    "value": ", ".join(pre.get("critical", []) + pre.get("warnings", [])),
+                    "required_value": "OK",
+                    "message": "Data precheck diagnostics"
+                })
+            if "regression_guard" in operational_health:
+                reg = operational_health["regression_guard"]
+                checks.append({
+                    "check_name": "regression_guard",
+                    "status": reg.get("status", "OK"),
+                    "value": reg.get("status", "OK"),
+                    "required_value": "OK",
+                    "message": "Regression guard test status"
+                })
+            if "paper_state_validation" in operational_health:
+                psv = operational_health["paper_state_validation"]
+                checks.append({
+                    "check_name": "paper_state_validation",
+                    "status": psv.get("status", "OK"),
+                    "value": psv.get("status", "OK"),
+                    "required_value": "OK",
+                    "message": "Paper state consistency"
+                })
+            if "schema_validation" in operational_health:
+                sv = operational_health["schema_validation"]
+                checks.append({
+                    "check_name": "schema_validation",
+                    "status": sv.get("status", "OK"),
+                    "value": sv.get("status", "OK"),
+                    "required_value": "OK",
+                    "message": "Report schema validation"
+                })
+            append_pre_submit_checks(str(db_path), run_id, checks)
+            
+        # Write state report files
+        _write_sqlite_state_report(latest_dir, db_path)
+        if run_dir.exists():
+            _write_sqlite_state_report(run_dir, db_path)
+            
+    except Exception as e_sql:
+        print(f"WARNING: SQLite mirror execution failed: {e_sql}")
+
     if make_chatgpt_report:
         for directory in [latest_dir, run_dir]:
             _write_chatgpt_master_report(
@@ -5874,6 +6116,7 @@ def run_strategy_experiments(
                 daily_pipeline_status=daily_pipeline_status,
                 operational_health=operational_health,
             )
+
     _write_run_manifest(
         latest_dir,
         run_dir,

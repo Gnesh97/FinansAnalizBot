@@ -28,6 +28,78 @@ CONFIG_PATH = BASE_DIR / "config.json"
 # Python path'ine testdata dizinini ekle
 sys.path.append(str(BASE_DIR / "testdata"))
 
+PIPELINE_LOCK = threading.Lock()
+
+def send_telegram_message(message, chat_id=None, parse_mode=None, reply_markup=None):
+    target_chat_id = chat_id if chat_id else TELEGRAM_CHAT_ID
+    if not target_chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": target_chat_id, "text": message}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        return True
+    except Exception as err:
+        print(f"Telegram gönderim hatası: {err}")
+        return False
+
+def send_telegram_document(document_path, caption=None, chat_id=None):
+    target_chat_id = chat_id if chat_id else TELEGRAM_CHAT_ID
+    if not target_chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+    data = {"chat_id": target_chat_id}
+    if caption:
+        data["caption"] = caption
+    try:
+        with open(document_path, "rb") as f:
+            files = {"document": f}
+            response = requests.post(url, data=data, files=files, timeout=30)
+            response.raise_for_status()
+        return True
+    except Exception as err:
+        print(f"Telegram döküman gönderim hatası: {err}")
+        return False
+
+def answer_callback_query(callback_query_id, text=None, show_alert=False):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+    payload = {
+        "callback_query_id": callback_query_id,
+        "text": text,
+        "show_alert": show_alert
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        return True
+    except Exception as err:
+        print(f"Telegram answerCallbackQuery hatası: {err}")
+        return False
+
+def edit_message_text(chat_id, message_id, text, parse_mode=None, reply_markup=None):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        return True
+    except Exception as err:
+        print(f"Telegram editMessageText hatası: {err}")
+        return False
+
 # Centralized Safety Configuration Flags
 BROKER_SUBMIT_ENABLED = False
 LIVE_TRADING_ENABLED = False
@@ -237,8 +309,8 @@ def run_local_paper(args):
     print("Running local paper trading experiments...")
     print("==================================================")
     
-    from runner import run_strategy_experiments
-    from universe_scanner import VALIDATION_EXPERIMENTS
+    from testdata.runner import run_strategy_experiments
+    from testdata.universe_scanner import VALIDATION_EXPERIMENTS
     
     data_folder_path = BASE_DIR / "testdata" / "hisseler"
     
@@ -269,7 +341,7 @@ def run_execution_preview(args):
     print("Generating dry-run execution preview...")
     print("==================================================")
     
-    from runner import run_execution_preview_check
+    from testdata.runner import run_execution_preview_check
     
     data_folder_path = BASE_DIR / "testdata" / "hisseler"
     
@@ -297,7 +369,7 @@ def run_pre_submit_check(args):
     print("Running pre-submit safety gates...")
     print("==================================================")
     
-    from runner import run_execution_preview_check
+    from testdata.runner import run_execution_preview_check
     
     data_folder_path = BASE_DIR / "testdata" / "hisseler"
     
@@ -323,7 +395,7 @@ def run_alpaca_check(args):
     print("Running GET-only Alpaca connection check...")
     print("==================================================")
     
-    from runner import run_alpaca_paper_check
+    from testdata.runner import run_alpaca_paper_check
     
     data_folder_path = BASE_DIR / "testdata" / "hisseler"
     

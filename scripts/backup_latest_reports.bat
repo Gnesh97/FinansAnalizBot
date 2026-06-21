@@ -42,6 +42,7 @@ for %%F in (
     "reports\latest\benchmark_audit_report.md"
     "reports\latest\data_audit_report.md"
     "reports\latest\data_audit_report.csv"
+    "state\trading_state.sqlite3"
 ) do (
     if exist "%%~F" (
         copy /Y "%%~F" "%BACKUP_DIR%\" >nul

@@ -45,3 +45,8 @@ data/
 datasets/
 output/
 
+# SQLite state database
+testdata/state/*.sqlite3
+testdata/state/*.sqlite3-wal
+testdata/state/*.sqlite3-shm
+
