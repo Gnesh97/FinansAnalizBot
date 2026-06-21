@@ -231,6 +231,23 @@ def row_count(path: Path) -> int:
         return max(sum(1 for _ in path.open("r")) - 1, 0)
 
 
+def date_range_summary(path: Path) -> dict[str, str]:
+    empty = {"first_date": "", "last_date": ""}
+    if not path.exists() or row_count(path) == 0:
+        return empty
+    try:
+        frame = pd.read_csv(path, usecols=["Date"])
+    except Exception:
+        return empty
+    dates = pd.to_datetime(frame["Date"], errors="coerce", utc=True).dropna()
+    if dates.empty:
+        return empty
+    return {
+        "first_date": str(dates.min().date()),
+        "last_date": str(dates.max().date()),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Daily + raw 5min + RTH 130min data indirir.")
     parser.add_argument("--symbols", nargs="*", default=None)
@@ -326,6 +343,9 @@ def main() -> None:
         if error:
             print(f"  error: {error}", flush=True)
 
+        daily_range = date_range_summary(daily_path)
+        raw_range = date_range_summary(raw_path)
+        bar_range = date_range_summary(bar_path)
         records.append(
             {
                 "symbol": symbol,
@@ -335,6 +355,12 @@ def main() -> None:
                 "daily_rows": row_count(daily_path),
                 "raw_5min_rows": row_count(raw_path),
                 "bar_130min_rows": row_count(bar_path),
+                "daily_first_date": daily_range["first_date"],
+                "daily_last_date": daily_range["last_date"],
+                "raw_5min_first_date": raw_range["first_date"],
+                "raw_5min_last_date": raw_range["last_date"],
+                "bar_130min_first_date": bar_range["first_date"],
+                "bar_130min_last_date": bar_range["last_date"],
                 "daily_path": str(daily_path),
                 "raw_5min_path": str(raw_path),
                 "bar_130min_path": str(bar_path),

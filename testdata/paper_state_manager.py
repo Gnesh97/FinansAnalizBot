@@ -109,7 +109,8 @@ def write_trade_log(reports_dir, df):
 def append_trade_log(reports_dir, rows):
     current = read_trade_log(reports_dir)
     if rows:
-        current = pd.concat([current, pd.DataFrame(rows)], ignore_index=True)
+        new_rows = pd.DataFrame(rows)
+        current = new_rows if current.empty else pd.concat([current, new_rows], ignore_index=True)
     return write_trade_log(reports_dir, current)
 
 

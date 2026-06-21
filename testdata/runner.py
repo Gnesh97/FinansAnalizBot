@@ -3209,50 +3209,82 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
         & previous_report.get("action", pd.Series("", index=previous_report.index)).astype(str).str.upper().isin(["BUY", "SELL"])
     ].copy()
     for _, row in pending.iterrows():
+        review_key = _paper_order_key(row)
+        latest_decision = decision_by_key.get(review_key, "ACCEPT")
         order_id = (
             str(row.get("strategy_name", "")),
             str(row.get("symbol", "")).upper(),
             str(row.get("action", "")).upper(),
             str(row.get("signal_date", "")),
         )
-        fill_price = _next_open_for_signal(asset_data, row.get("symbol"), row.get("signal_date"))
         carried = row.to_dict()
-        carried["user_decision"] = decision_by_key.get(_paper_order_key(row), "ACCEPT")
+        carried["user_decision"] = latest_decision
         carried["paper_actionable"] = True
-        if pd.notna(fill_price):
-            carried["fill_status"] = "PAPER_FILLED"
-            log_key = (*order_id, "PAPER_FILLED")
-            if log_key not in existing_log_keys:
-                shares = round(float(row.get("paper_position_notional", 0.0)) / float(fill_price), 6) if float(fill_price) > 0 else 0.0
-                log_rows.append(
-                    {
-                        "date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "strategy_name": row.get("strategy_name", ""),
-                        "symbol": row.get("symbol", ""),
-                        "action": row.get("action", ""),
-                        "signal_date": row.get("signal_date", ""),
-                        "signal_price": row.get("entry_price_reference", pd.NA),
-                        "assumed_fill_price": fill_price,
-                        "fill_status": "PAPER_FILLED",
-                        "shares": shares,
-                        "notional": row.get("paper_position_notional", pd.NA),
-                        "paper_capital": row.get("paper_capital_assumption", pd.NA),
-                        "reason": row.get("reason", ""),
-                        "liquidity_guard_pass": row.get("liquidity_guard_pass", pd.NA),
-                        "notes": notes_by_key.get(_paper_order_key(row), ""),
-                    }
-                )
+        if latest_decision != "ACCEPT":
+            if latest_decision == "REJECT":
+                carried["fill_status"] = "REJECTED"
+                log_key = (*order_id, "REJECTED")
+                if log_key not in existing_log_keys:
+                    log_rows.append(
+                        {
+                            "date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "strategy_name": row.get("strategy_name", ""),
+                            "symbol": row.get("symbol", ""),
+                            "action": row.get("action", ""),
+                            "signal_date": row.get("signal_date", ""),
+                            "signal_price": row.get("entry_price_reference", pd.NA),
+                            "assumed_fill_price": pd.NA,
+                            "fill_status": "REJECTED",
+                            "shares": 0,
+                            "notional": row.get("paper_position_notional", pd.NA),
+                            "paper_capital": row.get("paper_capital_assumption", pd.NA),
+                            "reason": row.get("reason", ""),
+                            "liquidity_guard_pass": row.get("liquidity_guard_pass", pd.NA),
+                            "notes": notes_by_key.get(review_key, ""),
+                        }
+                    )
+            else:
+                carried["fill_status"] = "PENDING_REVIEW"
+                reason = str(carried.get("reason", "") or "")
+                if "latest_review_not_accept" not in reason:
+                    carried["reason"] = f"{reason};latest_review_not_accept" if reason else "latest_review_not_accept"
         else:
-            carried["fill_status"] = "PENDING_NEXT_OPEN"
-            reason = str(carried.get("reason", "") or "")
-            if "missing_next_open" not in reason:
-                carried["reason"] = f"{reason};missing_next_open" if reason else "missing_next_open"
+            fill_price = _next_open_for_signal(asset_data, row.get("symbol"), row.get("signal_date"))
+            if pd.notna(fill_price):
+                carried["fill_status"] = "PAPER_FILLED"
+                log_key = (*order_id, "PAPER_FILLED")
+                if log_key not in existing_log_keys:
+                    shares = round(float(row.get("paper_position_notional", 0.0)) / float(fill_price), 6) if float(fill_price) > 0 else 0.0
+                    log_rows.append(
+                        {
+                            "date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "strategy_name": row.get("strategy_name", ""),
+                            "symbol": row.get("symbol", ""),
+                            "action": row.get("action", ""),
+                            "signal_date": row.get("signal_date", ""),
+                            "signal_price": row.get("entry_price_reference", pd.NA),
+                            "assumed_fill_price": fill_price,
+                            "fill_status": "PAPER_FILLED",
+                            "shares": shares,
+                            "notional": row.get("paper_position_notional", pd.NA),
+                            "paper_capital": row.get("paper_capital_assumption", pd.NA),
+                            "reason": row.get("reason", ""),
+                            "liquidity_guard_pass": row.get("liquidity_guard_pass", pd.NA),
+                            "notes": notes_by_key.get(review_key, ""),
+                        }
+                    )
+            else:
+                carried["fill_status"] = "PENDING_NEXT_OPEN"
+                reason = str(carried.get("reason", "") or "")
+                if "missing_next_open" not in reason:
+                    carried["reason"] = f"{reason};missing_next_open" if reason else "missing_next_open"
         if order_id not in existing_orders:
             rows_to_append.append(carried)
     if log_rows:
         log = append_trade_log(Path(trade_log_path).parent, log_rows)
     if rows_to_append:
-        output = pd.concat([output, pd.DataFrame(rows_to_append)], ignore_index=True)
+        appended = pd.DataFrame(rows_to_append)
+        output = appended if output.empty else pd.concat([output, appended], ignore_index=True)
     for column in _paper_signal_columns():
         if column not in output:
             output[column] = pd.NA
@@ -3584,6 +3616,63 @@ def _symbol_data_status(symbol, daily_dir, intraday_dir):
     return {"daily": inspect(daily_path), "intraday": inspect(intraday_path)}
 
 
+def _data_precheck_actions(rows, latest_daily, latest_130min):
+    actions = []
+    for row in rows:
+        symbol = str(row.get("symbol", "")).strip().upper()
+        warnings = {
+            warning
+            for warning in str(row.get("warnings", "")).split(";")
+            if warning
+        }
+        if "dow_empty_daily" in warnings:
+            actions.append(
+                {
+                    "symbol": symbol,
+                    "warning": "dow_empty_daily",
+                    "action": "refresh_or_remove_empty_daily_file_before_paper_submit",
+                    "detail": f"{symbol}_1D.csv is empty; rerun downloader for this symbol or exclude it after review.",
+                }
+            )
+        if "early_daily_end" in warnings:
+            actions.append(
+                {
+                    "symbol": symbol,
+                    "warning": "early_daily_end",
+                    "action": "refresh_stale_symbol_history_before_paper_submit",
+                    "detail": f"{symbol}_1D.csv ends before latest_daily_date={latest_daily}.",
+                }
+            )
+        if "psa_zero_volume" in warnings:
+            actions.append(
+                {
+                    "symbol": symbol,
+                    "warning": "psa_zero_volume",
+                    "action": "inspect_zero_volume_rows_before_paper_submit",
+                    "detail": f"{symbol}_1D.csv has zero-volume rows; verify vendor data or repair source.",
+                }
+            )
+        if "candidate_missing_or_empty_data" in warnings:
+            actions.append(
+                {
+                    "symbol": symbol,
+                    "warning": "candidate_missing_or_empty_data",
+                    "action": "block_candidate_until_daily_and_130min_data_exist",
+                    "detail": f"{symbol} is a paper candidate with missing or empty daily/130min data.",
+                }
+            )
+    if latest_daily == "none" or latest_130min == "none" or latest_daily != latest_130min:
+        actions.append(
+            {
+                "symbol": "ALL",
+                "warning": "latest_daily_130min_date_mismatch",
+                "action": "refresh_daily_and_130min_data_to_same_latest_session",
+                "detail": f"latest_daily_date={latest_daily}, latest_130min_date={latest_130min}.",
+            }
+        )
+    return actions
+
+
 def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, path):
     warnings = []
     critical = []
@@ -3634,10 +3723,12 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
         )
     if latest_daily == "none" or latest_130min == "none" or latest_daily != latest_130min:
         warnings.append("latest_daily_130min_date_mismatch")
+    actions = _data_precheck_actions(rows, latest_daily, latest_130min)
     result = {
         "status": "CRITICAL" if critical else ("WARNING" if warnings else "OK"),
         "warnings": sorted(set(warnings)),
         "critical": sorted(set(critical)),
+        "recommended_actions": actions,
     }
     lines = [
         "# Data Precheck Report",
@@ -3647,10 +3738,15 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
         f"- latest_130min_date: {latest_130min}",
         f"- critical_warnings: {', '.join(result['critical']) if result['critical'] else 'none'}",
         f"- warnings: {', '.join(result['warnings']) if result['warnings'] else 'none'}",
+        f"- recommended_action_count: {len(actions)}",
         "",
         "## Symbol Checks",
         "",
         _readable_table(ensure_columns(pd.DataFrame(rows), DATA_PRECHECK_COLUMNS)),
+        "",
+        "## Recommended Actions",
+        "",
+        _readable_table(pd.DataFrame(actions)) if actions else "none",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -3755,6 +3851,83 @@ def _write_pipeline_health_log(status, data_precheck, regression_guard, latest_d
     frame.to_csv(latest_path, index=False)
     frame.to_csv(history_path, mode="a", header=not history_path.exists(), index=False)
     return row
+
+
+def _json_safe(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (pd.Timestamp,)):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
+
+
+def _report_file_names(directory):
+    path = Path(directory)
+    if not path.exists():
+        return ["run_manifest.json"]
+    files = sorted(item.name for item in path.iterdir() if item.is_file() and item.name != "run_manifest.json")
+    return files + ["run_manifest.json"]
+
+
+def _write_run_manifest(
+    latest_dir,
+    run_dir,
+    command,
+    report_mode,
+    flags,
+    daily_dir,
+    intraday_dir,
+    cache_path,
+    cache_summary,
+    total_runtime_sec,
+    operational_health=None,
+):
+    health = (operational_health or {}).get("pipeline_health", {})
+    data_precheck = (operational_health or {}).get("data_precheck", {})
+    regression = (operational_health or {}).get("regression_guard", {})
+    manifest = {
+        "schema_version": 1,
+        "run_datetime": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "command": command or "unknown",
+        "report_mode": report_mode,
+        "flags": flags or {},
+        "latest_dir": str(Path(latest_dir)),
+        "run_dir": str(Path(run_dir)),
+        "daily_data_dir": str(Path(daily_dir)),
+        "intraday_data_dir": str(Path(intraday_dir)),
+        "latest_daily_date": _latest_csv_data_date(daily_dir),
+        "latest_130min_date": _latest_csv_data_date(intraday_dir),
+        "cache_path": str(cache_path) if cache_path else "",
+        "cache_hit_count": int(cache_summary.get("prepared_disk_cache_hits", 0) or 0),
+        "cache_miss_count": int(cache_summary.get("prepared_disk_cache_misses", 0) or 0),
+        "symbols_loaded": int(cache_summary.get("symbols_loaded", 0) or 0),
+        "rows_loaded": int(cache_summary.get("rows_loaded", 0) or 0),
+        "total_runtime_sec": round(float(total_runtime_sec), 4),
+        "pipeline_status": health.get("status", "not_generated"),
+        "strategy_metrics_changed": bool(health.get("strategy_metrics_changed", False)),
+        "benchmark_changed": bool(health.get("benchmark_changed", False)),
+        "warning_summary": health.get("warning_summary", "none"),
+        "data_precheck_status": data_precheck.get("status", "not_generated"),
+        "regression_guard_status": regression.get("status", "not_generated"),
+        "available_reports_latest": _report_file_names(latest_dir),
+        "generated_reports_run": _report_file_names(run_dir),
+    }
+    for directory in [Path(latest_dir), Path(run_dir)]:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "run_manifest.json").write_text(
+            json.dumps(_json_safe(manifest), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    return manifest
 
 
 def _chatgpt_operational_health_section(operational_health):
@@ -3936,6 +4109,14 @@ def _chatgpt_paper_readiness_section(paper_report):
     decision_counts = paper_report["user_decision"].value_counts().to_dict() if not paper_report.empty else {}
     stale_status = _paper_stale_status(paper_report)
     actionable = paper_report[paper_report["paper_actionable"].astype(bool)].copy() if not paper_report.empty else pd.DataFrame()
+    pending_next_open_count = int(fill_counts.get("PENDING_NEXT_OPEN", 0))
+    accepted_order_count = int(decision_counts.get("ACCEPT", 0))
+    if pending_next_open_count > 0:
+        next_action = "Wait for next valid market open data, then run scripts/run_daily_paper_pipeline.bat again."
+    elif accepted_order_count > 0:
+        next_action = "Run scripts/run_daily_paper_pipeline.bat after the next data update to refresh paper state."
+    else:
+        next_action = "Review paper signals and update paper_order_review.csv decisions if needed."
     table_columns = [
         "strategy_name",
         "signal_date",
@@ -3969,11 +4150,11 @@ def _chatgpt_paper_readiness_section(paper_report):
         f"- accepted_order_count: {int(decision_counts.get('ACCEPT', 0))}",
         f"- rejected_order_count: {int(decision_counts.get('REJECT', 0))}",
         f"- hold_review_count: {int(decision_counts.get('HOLD_REVIEW', 0))}",
-        f"- pending_next_open_count: {int(fill_counts.get('PENDING_NEXT_OPEN', 0))}",
+        f"- pending_next_open_count: {pending_next_open_count}",
         "- paper_pending_orders_path: reports/latest/paper_pending_orders.csv",
         "- paper_order_review_path: reports/latest/paper_order_review.csv",
         "- paper_trade_log_path: reports/latest/paper_trade_log.csv",
-        "- next action: review paper signals and manually record accepted paper fills in paper_trade_log_template.csv.",
+        f"- next action: {next_action}",
         "",
         "### Actionable Signals",
         "",
@@ -4513,6 +4694,9 @@ def _write_chatgpt_master_report(
     lines.extend(_chatgpt_operational_health_section(operational_health))
     lines.extend(_chatgpt_paper_readiness_section(paper_report))
     lines.extend(_chatgpt_performance_section(profile_rows))
+    latest_report_dir = Path(final_decision_path).parent if final_decision_path else Path(output_path).parent
+    lines.extend(_chatgpt_test_suite_status_section(latest_report_dir))
+    lines.extend(_chatgpt_existing_execution_readiness_section(latest_report_dir))
     lines.extend(_chatgpt_useful_commands_section())
     lines.extend(
         [
@@ -4532,6 +4716,74 @@ def _write_chatgpt_master_report(
         ]
     )
     output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _markdown_bullet_value(path, key, default="not_generated"):
+    if not Path(path).exists():
+        return default
+    prefix = f"- {key}:"
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.strip().lower().startswith(prefix.lower()):
+            return line.split(":", 1)[1].strip()
+    return default
+
+
+def _chatgpt_test_suite_status_section(latest_dir):
+    path = Path(latest_dir) / "test_run_report.md"
+    if not path.exists():
+        return [
+            "## Test Suite Status",
+            "",
+            "- status: not_generated",
+            "- tests ran count: not_generated",
+            "- last run datetime: not_generated",
+            "- path: reports/latest/test_run_report.md",
+            "",
+        ]
+    return [
+        "## Test Suite Status",
+        "",
+        f"- status: {_markdown_bullet_value(path, 'status')}",
+        f"- tests ran count: {_markdown_bullet_value(path, 'tests ran count')}",
+        f"- last run datetime: {_markdown_bullet_value(path, 'run datetime')}",
+        "- path: reports/latest/test_run_report.md",
+        "",
+    ]
+
+
+def _chatgpt_existing_execution_readiness_section(latest_dir):
+    latest_dir = Path(latest_dir)
+    preview_path = latest_dir / "execution_preview_report.md"
+    pre_submit_path = latest_dir / "pre_submit_readiness_report.md"
+    audit_path = latest_dir / "execution_audit_log.csv"
+    if not (preview_path.exists() and pre_submit_path.exists() and audit_path.exists()):
+        return []
+    audit = pd.DataFrame()
+    try:
+        audit = pd.read_csv(audit_path)
+    except Exception:
+        audit = pd.DataFrame()
+    submit_order_called = False
+    post_request_used = False
+    if not audit.empty and "event_type" in audit:
+        submit_order_called = audit["event_type"].astype(str).str.contains("SUBMIT_ORDER", case=False, na=False).any()
+        post_request_used = audit["event_type"].astype(str).str.contains("POST", case=False, na=False).any()
+    return [
+        "## Execution Bot Readiness",
+        "",
+        "- execution_preview_status: OK",
+        "- broker_mode: paper/dry-run",
+        f"- broker_submit_enabled: {_markdown_bullet_value(preview_path, 'broker_submit_enabled', 'false')}",
+        f"- live_trading_enabled: {_markdown_bullet_value(preview_path, 'live_trading_enabled', 'false')}",
+        f"- order_intents_count: {_markdown_bullet_value(preview_path, 'order intents count', '0')}",
+        f"- risk_pass_count: {_markdown_bullet_value(preview_path, 'risk passed count', '0')}",
+        f"- would_submit_count: {_markdown_bullet_value(preview_path, 'would_submit count', '0')}",
+        f"- submit_allowed: {_markdown_bullet_value(pre_submit_path, 'submit_allowed', 'False')}",
+        f"- submit_order_called: {str(bool(submit_order_called)).lower()}",
+        f"- post_request_used: {str(bool(post_request_used)).lower()}",
+        "- next action: Review pre-submit blocks and keep broker_submit_enabled false until explicit approval.",
+        "",
+    ]
 
 
 def _chatgpt_useful_commands_section():
@@ -4572,6 +4824,7 @@ def _write_execution_bot_readiness_section(latest_dir, summary):
         f"- idempotency_enabled: {str(bool(summary.get('idempotency_enabled', False))).lower()}",
         f"- order_intents_count: {int(summary.get('order_intents_count', 0) or 0)}",
         f"- risk_pass_count: {int(summary.get('risk_pass_count', 0) or 0)}",
+        f"- submit_candidate_risk_pass_count: {int(summary.get('submit_candidate_risk_pass_count', summary.get('risk_pass_count', 0)) or 0)}",
         f"- blocked_count: {int(summary.get('blocked_count', 0) or 0)}",
         f"- duplicate_intent_count: {int(summary.get('duplicate_intent_count', 0) or 0)}",
         f"- preview_duplicate_count: {int(summary.get('preview_duplicate_count', 0) or 0)}",
@@ -4581,6 +4834,7 @@ def _write_execution_bot_readiness_section(latest_dir, summary):
         f"- pre_submit_readiness_status: {summary.get('pre_submit_readiness_status', 'not_generated')}",
         f"- blocking_checks_count: {int(summary.get('blocking_checks_count', 0) or 0)}",
         f"- warning_checks_count: {int(summary.get('warning_checks_count', 0) or 0)}",
+        f"- would_submit_count: {int(summary.get('would_submit_count', 0) or 0)}",
         "- submit_allowed: false",
         f"- reason submit not allowed: {summary.get('reason_submit_not_allowed', 'Submit intentionally disabled.')}",
         f"- pre_submit_readiness_report_path: {summary.get('pre_submit_readiness_report_path', 'reports/latest/pre_submit_readiness_report.md')}",
@@ -5555,15 +5809,15 @@ def run_strategy_experiments(
         print("Slowest stages:")
         for _, row in slowest.head(5).iterrows():
             print(f"- {row['stage']}: {float(row['duration_sec']):.2f} sec")
+    manifest_flags = {
+        "run_oos": run_oos,
+        "run_attribution": run_attribution,
+        "run_cost_stress": run_cost_stress,
+        "run_liquidity_guard_sensitivity": run_liquidity_guard_sensitivity,
+        "run_robustness": run_robustness,
+        "paper_report": paper_report,
+    }
     if make_chatgpt_report:
-        flags = {
-            "run_oos": run_oos,
-            "run_attribution": run_attribution,
-            "run_cost_stress": run_cost_stress,
-            "run_liquidity_guard_sensitivity": run_liquidity_guard_sensitivity,
-            "run_robustness": run_robustness,
-            "paper_report": paper_report,
-        }
         for directory in [latest_dir, run_dir]:
             _write_chatgpt_master_report(
                 report,
@@ -5579,12 +5833,25 @@ def run_strategy_experiments(
                 final_decision_path=latest_dir / "final_candidate_decision_report.md",
                 command=command or "unknown",
                 report_mode=report_mode,
-                flags=flags,
+                flags=manifest_flags,
                 total_runtime_sec=total_runtime_sec,
                 cache_summary=cache_summary,
                 daily_pipeline_status=daily_pipeline_status,
                 operational_health=operational_health,
             )
+    _write_run_manifest(
+        latest_dir,
+        run_dir,
+        command or "unknown",
+        report_mode,
+        manifest_flags,
+        daily_dir,
+        intraday_dir,
+        cache_path,
+        cache_summary,
+        total_runtime_sec,
+        operational_health=operational_health,
+    )
     print(f"Total runtime: {total_runtime_sec:.2f} sec")
     print(
         "Cache hit/miss: "

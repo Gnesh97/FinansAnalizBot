@@ -230,6 +230,29 @@ def _write_audit_logs(latest_path, audit):
     return latest_audit_path, history_audit_path
 
 
+def _submit_candidate_risk_pass_count(risk_report):
+    if risk_report is None or risk_report.empty:
+        return 0
+    count = 0
+    for _, row in risk_report.iterrows():
+        if bool(row.get("risk_pass", False)):
+            count += 1
+            continue
+        reasons = [
+            reason.strip()
+            for reason in str(row.get("block_reason", "")).split(";")
+            if reason.strip()
+        ]
+        non_preview_reasons = [
+            reason
+            for reason in reasons
+            if reason != "duplicate_preview_execution_idempotency_key"
+        ]
+        if reasons and not non_preview_reasons:
+            count += 1
+    return count
+
+
 def write_execution_preview_reports(latest_dir, order_intents, risk_report, broker_submit_enabled=False):
     latest_path = Path(latest_dir)
     latest_path.mkdir(parents=True, exist_ok=True)
@@ -277,6 +300,7 @@ def write_execution_preview_reports(latest_dir, order_intents, risk_report, brok
         "pending_accepted_orders_count": int(len(order_intents)),
         "order_intents_count": int(len(order_intents)),
         "risk_pass_count": risk_passed,
+        "submit_candidate_risk_pass_count": _submit_candidate_risk_pass_count(risk_report),
         "blocked_count": blocked,
         "duplicate_intent_count": duplicate_intent_count,
         "preview_duplicate_count": max(duplicate_intent_count, skipped_duplicates),
@@ -313,6 +337,7 @@ def write_execution_preview_reports(latest_dir, order_intents, risk_report, brok
         f"- pending accepted orders count: {summary['pending_accepted_orders_count']}",
         f"- order intents count: {summary['order_intents_count']}",
         f"- risk passed count: {summary['risk_pass_count']}",
+        f"- submit candidate risk passed count: {summary['submit_candidate_risk_pass_count']}",
         f"- blocked count: {summary['blocked_count']}",
         f"- duplicate_intent_count: {summary['duplicate_intent_count']}",
         f"- preview_duplicate_count: {summary['preview_duplicate_count']}",
@@ -348,6 +373,7 @@ def _rewrite_execution_preview_summary(latest_path, summary):
         f"- pending accepted orders count: {summary['pending_accepted_orders_count']}",
         f"- order intents count: {summary['order_intents_count']}",
         f"- risk passed count: {summary['risk_pass_count']}",
+        f"- submit candidate risk passed count: {summary.get('submit_candidate_risk_pass_count', summary['risk_pass_count'])}",
         f"- blocked count: {summary['blocked_count']}",
         f"- duplicate_intent_count: {summary['duplicate_intent_count']}",
         f"- preview_duplicate_count: {summary['preview_duplicate_count']}",
