@@ -3,13 +3,13 @@ try:
     import sys
     from pathlib import Path
 
-    from .runner import run_alpaca_paper_check, run_execution_preview_check, run_strategy_experiments, run_universe_scanner
+    from .runner import run_alpaca_paper_check, run_execution_preview_check, run_paper_5min_fill_check, run_pending_5min_refresh, run_strategy_experiments, run_universe_scanner
 except ImportError:
     import argparse
     import sys
     from pathlib import Path
 
-    from runner import run_alpaca_paper_check, run_execution_preview_check, run_strategy_experiments, run_universe_scanner
+    from runner import run_alpaca_paper_check, run_execution_preview_check, run_paper_5min_fill_check, run_pending_5min_refresh, run_strategy_experiments, run_universe_scanner
 
 
 VALIDATION_EXPERIMENTS = [
@@ -238,6 +238,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Add pre-submit readiness checklist to execution preview; never submits orders.",
     )
+    parser.add_argument(
+        "--paper-5min-fill-check",
+        action="store_true",
+        help="Read-only raw_5min diagnostic for pending paper orders; never mutates official paper state.",
+    )
+    parser.add_argument(
+        "--refresh-pending-5min",
+        action="store_true",
+        help="Refresh raw_5min and rebuild 130min only for accepted pending paper symbols; never mutates paper state.",
+    )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)
     data_folder = Path(__file__).resolve().parent / "hisseler"
@@ -252,6 +262,19 @@ if __name__ == "__main__":
             str(data_folder),
             make_chatgpt_report=args.make_chatgpt_report,
             pre_submit_check=args.pre_submit_check,
+        )
+        raise SystemExit(0)
+    if args.refresh_pending_5min:
+        run_pending_5min_refresh(
+            str(data_folder),
+            make_chatgpt_report=args.make_chatgpt_report,
+        )
+        if not args.paper_5min_fill_check:
+            raise SystemExit(0)
+    if args.paper_5min_fill_check:
+        run_paper_5min_fill_check(
+            str(data_folder),
+            make_chatgpt_report=args.make_chatgpt_report,
         )
         raise SystemExit(0)
     run_strategy_experiments(
