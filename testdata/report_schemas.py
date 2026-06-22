@@ -31,6 +31,8 @@ PAPER_SIGNAL_COLUMNS = [
     "entry_price_reference",
     "assumed_fill_rule",
     "next_open_available",
+    "fill_bar_timestamp",
+    "fill_price_source",
     "max_positions",
 ]
 
@@ -110,6 +112,30 @@ DATA_PRECHECK_COLUMNS = [
     "intraday_latest_date",
     "zero_volume_rows",
     "warnings",
+]
+
+DATA_POLICY_DECISION_COLUMNS = [
+    "symbol",
+    "warning",
+    "policy_status",
+    "recommended_policy_action",
+    "operator_decision",
+    "operator_note",
+]
+
+DATA_POLICY_REVIEW_EVIDENCE_COLUMNS = [
+    "symbol",
+    "daily_exists",
+    "daily_rows",
+    "daily_first_date",
+    "daily_last_date",
+    "daily_zero_volume_rows",
+    "intraday_exists",
+    "intraday_rows",
+    "intraday_first_datetime",
+    "intraday_last_datetime",
+    "source_note",
+    "recommended_operator_next_action",
 ]
 
 REGRESSION_GUARD_COLUMNS = [

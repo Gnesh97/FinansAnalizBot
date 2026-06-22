@@ -4,6 +4,7 @@ import json
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib import parse, request
 
@@ -27,6 +28,8 @@ try:
     )
     from .report_schemas import (
         ALPACA_ORDER_PREVIEW_COLUMNS,
+        DATA_POLICY_DECISION_COLUMNS,
+        DATA_POLICY_REVIEW_EVIDENCE_COLUMNS,
         DATA_PRECHECK_COLUMNS,
         PAPER_ORDER_REVIEW_COLUMNS,
         PAPER_PENDING_ORDERS_COLUMNS,
@@ -91,6 +94,8 @@ except ImportError:
     )
     from report_schemas import (
         ALPACA_ORDER_PREVIEW_COLUMNS,
+        DATA_POLICY_DECISION_COLUMNS,
+        DATA_POLICY_REVIEW_EVIDENCE_COLUMNS,
         DATA_PRECHECK_COLUMNS,
         PAPER_ORDER_REVIEW_COLUMNS,
         PAPER_PENDING_ORDERS_COLUMNS,
@@ -484,6 +489,774 @@ def run_alpaca_paper_check(data_folder="hisseler", report_output_dir="reports", 
     print(f"Alpaca order preview: {latest_dir / 'alpaca_order_preview.csv'}")
     print("Order submit enabled: false")
     return summary, preview
+
+
+PAPER_5MIN_FILL_CHECK_COLUMNS = [
+    "symbol",
+    "strategy_name",
+    "signal_date",
+    "pending_status",
+    "raw_5min_latest_timestamp",
+    "raw_5min_latest_date",
+    "has_next_open_5min",
+    "hypothetical_fill_timestamp",
+    "hypothetical_fill_price",
+    "warning",
+    "would_fill_if_5min_enabled",
+]
+
+
+RAW_5MIN_UPDATE_AUDIT_COLUMNS = [
+    "raw_5min_update_called",
+    "provider_source_used",
+    "requested_symbols_count",
+    "pending_symbols_requested",
+    "pending_symbol",
+    "latest_raw_5min_date_by_pending_symbol",
+    "same_day_requested",
+    "same_day_rows_received_count",
+    "files_written_count",
+    "reason_if_no_2026_06_22_data",
+]
+
+
+PENDING_5MIN_REFRESH_COLUMNS = [
+    "symbol",
+    "pending_order_count",
+    "raw_5min_file_exists",
+    "old_latest_timestamp",
+    "provider_requested",
+    "provider_rows_received",
+    "new_rows_added",
+    "new_latest_timestamp",
+    "raw_5min_refresh_status",
+    "rebuilt_130min",
+    "old_130min_latest_timestamp",
+    "new_130min_latest_timestamp",
+    "warning",
+    "error",
+]
+
+
+def _raw_5min_dir(data_folder):
+    return Path(data_folder) / "raw_5min"
+
+
+def _pending_5min_diagnostic_orders(latest_dir):
+    pending = read_pending_orders(latest_dir)
+    if pending is None or pending.empty:
+        return pd.DataFrame()
+    decision = pending.get("user_decision", pd.Series("", index=pending.index)).astype(str).str.upper()
+    status = pending.get("status", pd.Series("", index=pending.index)).astype(str).str.upper()
+    fill_status = pending.get("fill_status", pd.Series("", index=pending.index)).astype(str).str.upper()
+    pending_next_open = fill_status.eq("PENDING_NEXT_OPEN") | status.isin(["PENDING_NEXT_OPEN", "PENDING"])
+    return pending[decision.eq("ACCEPT") & pending_next_open].copy()
+
+
+def _pending_5min_refresh_orders(latest_dir):
+    return _pending_5min_diagnostic_orders(latest_dir)
+
+
+def _first_rth_5min_fill(raw_frame, signal_date, target_date="2026-06-22"):
+    if raw_frame is None or raw_frame.empty:
+        return None, pd.NA
+    frame = raw_frame.sort_index()
+    signal_timestamp = pd.to_datetime(signal_date, errors="coerce")
+    if pd.isna(signal_timestamp):
+        signal_timestamp = pd.Timestamp.min.tz_localize(frame.index.tz) if frame.index.tz is not None else pd.Timestamp.min
+    elif frame.index.tz is not None:
+        if signal_timestamp.tzinfo is None:
+            signal_timestamp = signal_timestamp.tz_localize(frame.index.tz)
+        else:
+            signal_timestamp = signal_timestamp.tz_convert(frame.index.tz)
+    elif signal_timestamp.tzinfo is not None:
+        signal_timestamp = signal_timestamp.tz_localize(None)
+
+    local_index = frame.index
+    session_date = pd.to_datetime(target_date).date()
+    mask = (
+        (pd.Series(local_index.date, index=frame.index).eq(session_date))
+        & (local_index > signal_timestamp)
+        & (pd.Series(local_index.time, index=frame.index) >= pd.Timestamp("09:30").time())
+        & (pd.Series(local_index.time, index=frame.index) < pd.Timestamp("16:00").time())
+    )
+    candidates = frame.loc[mask]
+    if candidates.empty:
+        return None, pd.NA
+    first_timestamp = candidates.index[0]
+    price = pd.to_numeric(pd.Series([candidates.iloc[0].get("Open", pd.NA)]), errors="coerce").iloc[0]
+    return first_timestamp, price
+
+
+def _paper_5min_fill_check_summary(check):
+    if check is None or check.empty:
+        return {
+            "status": "WARNING",
+            "checked_order_count": 0,
+            "would_fill_count": 0,
+            "missing_5min_count": 0,
+            "latest_5min_date_min": "none",
+            "latest_5min_date_max": "none",
+            "official_state_mutated": False,
+        }
+    latest_dates = check["raw_5min_latest_date"].replace("", pd.NA).dropna()
+    missing_5min_count = int((~check["has_next_open_5min"].astype(bool)).sum())
+    return {
+        "status": "OK" if missing_5min_count == 0 else "WARNING",
+        "checked_order_count": int(len(check)),
+        "would_fill_count": int(check["would_fill_if_5min_enabled"].astype(bool).sum()),
+        "missing_5min_count": missing_5min_count,
+        "latest_5min_date_min": str(latest_dates.min()) if not latest_dates.empty else "none",
+        "latest_5min_date_max": str(latest_dates.max()) if not latest_dates.empty else "none",
+        "official_state_mutated": False,
+    }
+
+
+def _write_paper_5min_fill_check_report(check, summary, csv_path, markdown_path):
+    check = ensure_columns(check, PAPER_5MIN_FILL_CHECK_COLUMNS, fill_value="")
+    check.to_csv(csv_path, index=False)
+    lines = [
+        "# Paper 5min Fill Check Report",
+        "",
+        "Read-only diagnostic. Official paper pending orders and trade log are not mutated.",
+        "",
+        f"- status: {summary['status']}",
+        f"- checked_order_count: {summary['checked_order_count']}",
+        f"- would_fill_count: {summary['would_fill_count']}",
+        f"- missing_5min_count: {summary['missing_5min_count']}",
+        f"- latest_5min_date_min: {summary['latest_5min_date_min']}",
+        f"- latest_5min_date_max: {summary['latest_5min_date_max']}",
+        f"- official_state_mutated: {str(summary['official_state_mutated']).lower()}",
+        "",
+        _readable_table(check),
+        "",
+    ]
+    markdown_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _replace_markdown_section(text, marker, section):
+    replacement = "\n".join(section).rstrip()
+    if marker not in text:
+        return text.rstrip() + "\n\n" + replacement
+    start = text.index(marker)
+    next_start = text.find("\n## ", start + len(marker))
+    if next_start == -1:
+        return text[:start].rstrip() + "\n\n" + replacement
+    return text[:start].rstrip() + "\n\n" + replacement + "\n\n" + text[next_start:].lstrip()
+
+
+def _write_paper_5min_master_section(latest_dir, summary):
+    path = Path(latest_dir) / "chatgpt_master_report.md"
+    marker = "## 5min Fill Diagnostic"
+    section = [
+        marker,
+        "",
+        f"- status: {summary['status']}",
+        f"- checked_order_count: {summary['checked_order_count']}",
+        f"- would_fill_count: {summary['would_fill_count']}",
+        f"- missing_5min_count: {summary['missing_5min_count']}",
+        f"- latest_5min_date_min: {summary['latest_5min_date_min']}",
+        f"- latest_5min_date_max: {summary['latest_5min_date_max']}",
+        "- official_state_mutated: false",
+        "",
+    ]
+    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else "# ChatGPT Master Report\n"
+    path.write_text(_replace_markdown_section(text, marker, section), encoding="utf-8")
+
+
+def _raw_5min_latest_date(path):
+    if not Path(path).exists():
+        return ""
+    try:
+        frame = pd.read_csv(path, usecols=["Date"])
+    except Exception:
+        return ""
+    dates = pd.to_datetime(frame["Date"], errors="coerce", utc=True).dropna()
+    return str(dates.max().date()) if not dates.empty else ""
+
+
+def _raw_5min_same_day_row_count(path, target_date="2026-06-22"):
+    if not Path(path).exists():
+        return 0
+    try:
+        frame = pd.read_csv(path, usecols=["Date"])
+    except Exception:
+        return 0
+    dates = pd.to_datetime(frame["Date"], errors="coerce", utc=True).dropna()
+    if dates.empty:
+        return 0
+    return int((dates.dt.date == pd.to_datetime(target_date).date()).sum())
+
+
+def _daily_pipeline_update_command(project_root):
+    path = Path(project_root) / "scripts" / "run_daily_paper_pipeline.bat"
+    if not path.exists():
+        return ""
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if "vericekici_updated.py" in stripped and stripped.lower().startswith("python "):
+            return stripped
+    return ""
+
+
+def _command_value(command, flag):
+    parts = command.split()
+    if flag not in parts:
+        return ""
+    index = parts.index(flag)
+    return parts[index + 1] if index + 1 < len(parts) else ""
+
+
+def _read_ohlcv_file(path):
+    if not Path(path).exists():
+        return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+    try:
+        frame = pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+    required = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    for column in required:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    return frame[required].dropna(subset=["Date"]).copy()
+
+
+def _latest_timestamp_string(frame):
+    if frame is None or frame.empty or "Date" not in frame:
+        return ""
+    dates = pd.to_datetime(frame["Date"], errors="coerce", utc=True).dropna()
+    if dates.empty:
+        return ""
+    return str(dates.max().tz_convert("America/New_York"))
+
+
+def _normalize_provider_bars(raw_bars, symbol):
+    output_columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    if raw_bars is None or raw_bars.empty:
+        return pd.DataFrame(columns=output_columns)
+    bars = raw_bars.copy()
+    if isinstance(bars.index, pd.MultiIndex):
+        symbol_level = "symbol" if "symbol" in bars.index.names else bars.index.names[0]
+        if symbol not in set(bars.index.get_level_values(symbol_level).astype(str).str.upper()):
+            return pd.DataFrame(columns=output_columns)
+        bars = bars.xs(symbol, level=symbol_level)
+    bars.index = pd.to_datetime(bars.index, utc=True).tz_convert("America/New_York")
+    bars = bars.sort_index()
+    bars = bars.between_time("09:30", "15:59", inclusive="both")
+    bars = bars.rename(
+        columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}
+    )
+    missing = [column for column in ["Open", "High", "Low", "Close", "Volume"] if column not in bars.columns]
+    if missing:
+        raise ValueError(f"{symbol}: provider response missing columns {missing}")
+    bars = bars[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    bars.index.name = "Date"
+    return bars.reset_index()[output_columns]
+
+
+def _merge_ohlcv_frames(existing, incoming):
+    output_columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    frames = []
+    for frame in [existing, incoming]:
+        if frame is not None and not frame.empty:
+            work = frame.copy()
+            for column in output_columns:
+                if column not in work.columns:
+                    work[column] = pd.NA
+            frames.append(work[output_columns])
+    if not frames:
+        return pd.DataFrame(columns=output_columns)
+    merged = pd.concat(frames, ignore_index=True)
+    parsed = pd.to_datetime(merged["Date"], errors="coerce", utc=True)
+    merged = merged.loc[parsed.notna()].copy()
+    merged["_parsed_date"] = parsed[parsed.notna()]
+    merged = merged.sort_values("_parsed_date")
+    merged = merged.drop_duplicates("_parsed_date", keep="last")
+    merged["Date"] = merged["_parsed_date"].dt.tz_convert("America/New_York").astype(str)
+    return merged[output_columns].reset_index(drop=True)
+
+
+def _atomic_write_ohlcv(path, frame):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.stem}.tmp{path.suffix}")
+    frame.to_csv(temp_path, index=False)
+    os.replace(temp_path, path)
+
+
+def _refresh_fetch_window(existing, pending_rows):
+    dates = pd.to_datetime(existing.get("Date", pd.Series(dtype=str)), errors="coerce", utc=True).dropna()
+    if not dates.empty:
+        start = dates.max().floor("D").to_pydatetime()
+    else:
+        signal_dates = pd.to_datetime(pending_rows.get("signal_date", pd.Series(dtype=str)), errors="coerce", utc=True).dropna()
+        start = signal_dates.min().floor("D").to_pydatetime() if not signal_dates.empty else datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = datetime.now(timezone.utc)
+    if end <= start:
+        end = start + pd.Timedelta(days=1)
+    return start, end
+
+
+def _fetch_pending_raw_5min(symbol, start, end):
+    try:
+        from alpaca.data.enums import Adjustment, DataFeed
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+    except ModuleNotFoundError as error:
+        if error.name != "alpaca":
+            raise
+        raise RuntimeError("missing alpaca-py; install with python -m pip install alpaca-py") from error
+
+    env_path = Path.cwd() / ".env"
+    if not env_path.exists():
+        env_path = Path(__file__).resolve().parents[1] / ".env"
+    api_key, secret_key, _base_url = _alpaca_config(env_path)
+    if not api_key or not secret_key:
+        raise RuntimeError("missing ALPACA_API_KEY or ALPACA_SECRET_KEY")
+    client = StockHistoricalDataClient(api_key, secret_key)
+    request_obj = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=TimeFrame(5, TimeFrameUnit.Minute),
+        start=start,
+        end=end,
+        adjustment=Adjustment.ALL,
+        feed=DataFeed.IEX,
+    )
+    response = client.get_stock_bars(request_obj)
+    return _normalize_provider_bars(response.df, symbol)
+
+
+def _complete_130min_from_raw(raw_5min):
+    output_columns = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    if raw_5min is None or raw_5min.empty:
+        return pd.DataFrame(columns=output_columns), "no_raw_5min_rows"
+    frame = raw_5min.copy()
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce", utc=True)
+    frame = frame.dropna(subset=["Date"]).sort_values("Date")
+    if frame.empty:
+        return pd.DataFrame(columns=output_columns), "no_valid_raw_5min_timestamps"
+    local_time = frame["Date"].dt.tz_convert("America/New_York")
+    minutes = local_time.dt.hour * 60 + local_time.dt.minute
+    rth_start = 9 * 60 + 30
+    rth_end = 16 * 60
+    frame = frame[(minutes >= rth_start) & (minutes < rth_end)].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=output_columns), "no_rth_raw_5min_rows"
+    local_time = frame["Date"].dt.tz_convert("America/New_York")
+    minutes = local_time.dt.hour * 60 + local_time.dt.minute
+    frame["session"] = local_time.dt.date
+    bins = [rth_start - 1, 11 * 60 + 39, 13 * 60 + 49, rth_end - 1]
+    frame["block"] = pd.cut(minutes, bins=bins, labels=[0, 1, 2]).astype(int)
+    block_start_minutes = {0: 9 * 60 + 30, 1: 11 * 60 + 40, 2: 13 * 60 + 50}
+    block_last_start_minutes = {0: 11 * 60 + 35, 1: 13 * 60 + 45, 2: 15 * 60 + 55}
+    complete_keys = []
+    incomplete_count = 0
+    for key, group in frame.groupby(["session", "block"], sort=True):
+        group_local = group["Date"].dt.tz_convert("America/New_York")
+        group_minutes = group_local.dt.hour * 60 + group_local.dt.minute
+        if int(group_minutes.max()) >= block_last_start_minutes[int(key[1])]:
+            complete_keys.append(key)
+        else:
+            incomplete_count += 1
+    if not complete_keys:
+        return pd.DataFrame(columns=output_columns), "no_complete_130min_bars"
+    filtered = frame[
+        frame.apply(lambda row: (row["session"], row["block"]) in set(complete_keys), axis=1)
+    ].copy()
+    output = filtered.groupby(["session", "block"], sort=True).agg(
+        Open=("Open", "first"),
+        High=("High", "max"),
+        Low=("Low", "min"),
+        Close=("Close", "last"),
+        Volume=("Volume", "sum"),
+    ).reset_index()
+    session_start = pd.to_datetime(output["session"].astype(str)).dt.tz_localize("America/New_York")
+    output["Date"] = [
+        session + pd.Timedelta(minutes=block_start_minutes[int(block)])
+        for session, block in zip(session_start, output["block"])
+    ]
+    output["Date"] = pd.to_datetime(output["Date"], utc=True).astype(str)
+    warning = "incomplete_current_130min_bar_excluded" if incomplete_count else ""
+    return output[output_columns].dropna().reset_index(drop=True), warning
+
+
+def _write_pending_5min_master_section(latest_dir, summary):
+    path = Path(latest_dir) / "chatgpt_master_report.md"
+    marker = "## Pending 5min Refresh"
+    section = [
+        marker,
+        "",
+        f"- status: {summary['status']}",
+        f"- pending_symbols_count: {summary['pending_symbols_count']}",
+        f"- provider_requested_count: {summary['provider_requested_count']}",
+        f"- symbols_refreshed_count: {summary['symbols_refreshed_count']}",
+        f"- total_provider_rows_received: {summary['total_provider_rows_received']}",
+        f"- total_new_rows_added: {summary['total_new_rows_added']}",
+        f"- latest_raw_5min_date_min: {summary['latest_raw_5min_date_min']}",
+        f"- latest_raw_5min_date_max: {summary['latest_raw_5min_date_max']}",
+        f"- latest_130min_date_min: {summary['latest_130min_date_min']}",
+        f"- latest_130min_date_max: {summary['latest_130min_date_max']}",
+        "- official_state_mutated: false",
+        "",
+    ]
+    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else "# ChatGPT Master Report\n"
+    path.write_text(_replace_markdown_section(text, marker, section), encoding="utf-8")
+
+
+def _pending_5min_refresh_summary(report):
+    if report is None or report.empty:
+        return {
+            "status": "WARNING",
+            "pending_symbols_count": 0,
+            "provider_requested_count": 0,
+            "symbols_refreshed_count": 0,
+            "total_provider_rows_received": 0,
+            "total_new_rows_added": 0,
+            "latest_raw_5min_date_min": "none",
+            "latest_raw_5min_date_max": "none",
+            "latest_130min_date_min": "none",
+            "latest_130min_date_max": "none",
+            "official_state_mutated": False,
+        }
+    errors = report["error"].fillna("").astype(str).str.strip().ne("")
+    warnings = report["warning"].fillna("").astype(str).str.strip().ne("")
+    raw_dates = pd.to_datetime(report["new_latest_timestamp"], errors="coerce", utc=True).dropna()
+    bar_dates = pd.to_datetime(report["new_130min_latest_timestamp"], errors="coerce", utc=True).dropna()
+    return {
+        "status": "ERROR" if bool(errors.any()) else ("WARNING" if bool(warnings.any()) else "OK"),
+        "pending_symbols_count": int(len(report)),
+        "provider_requested_count": int(report["provider_requested"].astype(bool).sum()),
+        "symbols_refreshed_count": int(report["raw_5min_refresh_status"].astype(str).isin(["merged", "no_new_rows"]).sum()),
+        "total_provider_rows_received": int(pd.to_numeric(report["provider_rows_received"], errors="coerce").fillna(0).sum()),
+        "total_new_rows_added": int(pd.to_numeric(report["new_rows_added"], errors="coerce").fillna(0).sum()),
+        "latest_raw_5min_date_min": str(raw_dates.min().date()) if not raw_dates.empty else "none",
+        "latest_raw_5min_date_max": str(raw_dates.max().date()) if not raw_dates.empty else "none",
+        "latest_130min_date_min": str(bar_dates.min().date()) if not bar_dates.empty else "none",
+        "latest_130min_date_max": str(bar_dates.max().date()) if not bar_dates.empty else "none",
+        "official_state_mutated": False,
+    }
+
+
+def _write_pending_5min_refresh_report(report, summary, csv_path, markdown_path):
+    report = ensure_columns(report, PENDING_5MIN_REFRESH_COLUMNS, fill_value="")
+    report.to_csv(csv_path, index=False)
+    lines = [
+        "# Pending 5min Refresh Report",
+        "",
+        "Refreshes only ACCEPT + PENDING_NEXT_OPEN paper symbols. Official paper state is not mutated.",
+        "",
+        f"- status: {summary['status']}",
+        f"- pending_symbols_count: {summary['pending_symbols_count']}",
+        f"- provider_requested_count: {summary['provider_requested_count']}",
+        f"- symbols_refreshed_count: {summary['symbols_refreshed_count']}",
+        f"- total_provider_rows_received: {summary['total_provider_rows_received']}",
+        f"- total_new_rows_added: {summary['total_new_rows_added']}",
+        f"- latest_raw_5min_date_min: {summary['latest_raw_5min_date_min']}",
+        f"- latest_raw_5min_date_max: {summary['latest_raw_5min_date_max']}",
+        f"- latest_130min_date_min: {summary['latest_130min_date_min']}",
+        f"- latest_130min_date_max: {summary['latest_130min_date_max']}",
+        f"- official_state_mutated: {str(summary['official_state_mutated']).lower()}",
+        "",
+        _readable_table(report),
+        "",
+    ]
+    markdown_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def run_pending_5min_refresh(data_folder="hisseler", report_output_dir="reports", make_chatgpt_report=False):
+    latest_dir, _run_dir = _report_output_paths(report_output_dir, data_folder)
+    pending = _pending_5min_refresh_orders(latest_dir)
+    raw_dir = Path(data_folder) / "raw_5min"
+    bar_dir = Path(data_folder) / "bars_130min"
+    rows = []
+    if pending is None or pending.empty:
+        report = ensure_columns(pd.DataFrame(), PENDING_5MIN_REFRESH_COLUMNS, fill_value="")
+        summary = _pending_5min_refresh_summary(report)
+        _write_pending_5min_refresh_report(
+            report,
+            summary,
+            latest_dir / "pending_5min_refresh_report.csv",
+            latest_dir / "pending_5min_refresh_report.md",
+        )
+        if make_chatgpt_report:
+            _write_pending_5min_master_section(latest_dir, summary)
+        return summary, report
+
+    for symbol, symbol_pending in pending.groupby(pending["symbol"].astype(str).str.upper()):
+        raw_path = raw_dir / f"{symbol}_5min.csv"
+        bar_path = bar_dir / f"{symbol}_130min.csv"
+        existing_raw = _read_ohlcv_file(raw_path)
+        existing_bar = _read_ohlcv_file(bar_path)
+        old_latest = _latest_timestamp_string(existing_raw)
+        old_bar_latest = _latest_timestamp_string(existing_bar)
+        provider_rows = pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+        merged = existing_raw.copy()
+        new_rows_added = 0
+        raw_status = "not_requested"
+        rebuilt_130min = False
+        warning = ""
+        error = ""
+        provider_requested = True
+        try:
+            start, end = _refresh_fetch_window(existing_raw, symbol_pending)
+            provider_rows = _fetch_pending_raw_5min(symbol, start, end)
+            provider_count = int(len(provider_rows))
+            merged = _merge_ohlcv_frames(existing_raw, provider_rows)
+            if len(merged) < len(existing_raw):
+                raise RuntimeError("merged_raw_5min_row_count_lower_than_existing")
+            old_dates = pd.to_datetime(existing_raw.get("Date", pd.Series(dtype=str)), errors="coerce", utc=True).dropna()
+            new_dates = pd.to_datetime(merged.get("Date", pd.Series(dtype=str)), errors="coerce", utc=True).dropna()
+            old_set = set(old_dates.astype("int64").tolist()) if not old_dates.empty else set()
+            new_rows_added = int(sum(item not in old_set for item in new_dates.astype("int64").tolist()))
+            if provider_count == 0:
+                warning = "provider_returned_no_rows"
+                raw_status = "no_new_rows"
+            elif new_rows_added == 0:
+                warning = "provider_rows_already_present"
+                raw_status = "no_new_rows"
+            else:
+                raw_status = "merged"
+            if merged.empty:
+                raise RuntimeError("merged_raw_5min_empty")
+            _atomic_write_ohlcv(raw_path, merged)
+            rebuilt, rebuild_warning = _complete_130min_from_raw(merged)
+            if rebuild_warning:
+                warning = ";".join([item for item in [warning, rebuild_warning] if item])
+            if rebuilt.empty:
+                raise RuntimeError("rebuilt_130min_empty")
+            _atomic_write_ohlcv(bar_path, rebuilt)
+            rebuilt_130min = True
+        except Exception as exc:
+            error = str(exc)
+            provider_count = int(len(provider_rows)) if provider_rows is not None else 0
+            raw_status = "error"
+        final_raw = _read_ohlcv_file(raw_path)
+        final_bar = _read_ohlcv_file(bar_path)
+        rows.append(
+            {
+                "symbol": symbol,
+                "pending_order_count": int(len(symbol_pending)),
+                "raw_5min_file_exists": bool(raw_path.exists()),
+                "old_latest_timestamp": old_latest,
+                "provider_requested": provider_requested,
+                "provider_rows_received": provider_count,
+                "new_rows_added": new_rows_added,
+                "new_latest_timestamp": _latest_timestamp_string(final_raw),
+                "raw_5min_refresh_status": raw_status,
+                "rebuilt_130min": rebuilt_130min,
+                "old_130min_latest_timestamp": old_bar_latest,
+                "new_130min_latest_timestamp": _latest_timestamp_string(final_bar),
+                "warning": warning,
+                "error": error,
+            }
+        )
+    report = ensure_columns(pd.DataFrame(rows), PENDING_5MIN_REFRESH_COLUMNS, fill_value="")
+    summary = _pending_5min_refresh_summary(report)
+    _write_pending_5min_refresh_report(
+        report,
+        summary,
+        latest_dir / "pending_5min_refresh_report.csv",
+        latest_dir / "pending_5min_refresh_report.md",
+    )
+    if make_chatgpt_report:
+        _write_pending_5min_master_section(latest_dir, summary)
+    print(f"Pending 5min refresh report: {latest_dir / 'pending_5min_refresh_report.md'}")
+    print(f"Official state mutated: {str(summary['official_state_mutated']).lower()}")
+    print("submit_order_called: false")
+    print("POST: false")
+    return summary, report
+
+
+def _write_raw_5min_update_audit_report(data_folder, latest_dir, pending_orders):
+    data_path = Path(data_folder)
+    testdata_root = data_path.parent
+    project_root = testdata_root.parent
+    command = _daily_pipeline_update_command(project_root)
+    manifest_path = data_path / "manifest" / "download_manifest.csv"
+    manifest = pd.DataFrame()
+    if manifest_path.exists():
+        try:
+            manifest = pd.read_csv(manifest_path)
+        except Exception:
+            manifest = pd.DataFrame()
+    pending_symbols = sorted(
+        {
+            str(symbol).strip().upper()
+            for symbol in pending_orders.get("symbol", pd.Series(dtype=str)).tolist()
+            if str(symbol).strip()
+        }
+    )
+    manifest_symbols = (
+        set(manifest.get("symbol", pd.Series(dtype=str)).astype(str).str.upper())
+        if not manifest.empty and "symbol" in manifest
+        else set()
+    )
+    provider_source = _command_value(command, "--feed") or "unknown"
+    same_day_requested = "--end today" in command.lower()
+    raw_update_called = bool(command)
+    files_written_count = 0
+    if not manifest.empty and "raw_5min_status" in manifest:
+        files_written_count = int(manifest["raw_5min_status"].astype(str).str.lower().eq("downloaded").sum())
+    refresh_report = pd.DataFrame()
+    refresh_report_path = Path(latest_dir) / "pending_5min_refresh_report.csv"
+    if refresh_report_path.exists():
+        try:
+            refresh_report = pd.read_csv(refresh_report_path)
+        except Exception:
+            refresh_report = pd.DataFrame()
+    same_day_rows_received_count = 0
+    rows = []
+    for symbol in pending_symbols:
+        raw_path = data_path / "raw_5min" / f"{symbol}_5min.csv"
+        latest_date = _raw_5min_latest_date(raw_path)
+        same_day_rows = _raw_5min_same_day_row_count(raw_path)
+        same_day_rows_received_count += same_day_rows
+        reason = ""
+        if latest_date == "2026-06-22":
+            reason = ""
+        elif not raw_path.exists():
+            reason = "missing_raw_5min_file"
+        elif not refresh_report.empty and "symbol" in refresh_report:
+            refresh_match = refresh_report[
+                refresh_report["symbol"].astype(str).str.upper().eq(symbol)
+            ]
+            if not refresh_match.empty:
+                refresh_row = refresh_match.iloc[0]
+                refresh_error = str(refresh_row.get("error", "")).strip()
+                refresh_warning = str(refresh_row.get("warning", "")).strip()
+                refresh_status = str(refresh_row.get("raw_5min_refresh_status", "")).strip()
+                if refresh_error:
+                    reason = f"pending_refresh_error:{refresh_error}"
+                elif refresh_warning:
+                    reason = f"pending_refresh_warning:{refresh_warning}"
+                else:
+                    reason = f"pending_refresh_status:{refresh_status}"
+            else:
+                reason = "pending_refresh_missing_symbol"
+        elif not manifest.empty:
+            match = manifest[manifest.get("symbol", pd.Series(dtype=str)).astype(str).str.upper().eq(symbol)]
+            status = str(match.iloc[0].get("raw_5min_status", "")).lower() if not match.empty else ""
+            error = str(match.iloc[0].get("error", "")).strip() if not match.empty else ""
+            if status == "skipped":
+                reason = "existing_raw_5min_file_skipped_without_overwrite"
+            elif error:
+                reason = f"downloader_error:{error}"
+            else:
+                reason = "same_day_rows_not_present_in_raw_5min_file"
+        else:
+            reason = "download_manifest_missing"
+        rows.append(
+            {
+                "raw_5min_update_called": raw_update_called,
+                "provider_source_used": provider_source,
+                "requested_symbols_count": int(len(manifest)) if not manifest.empty else 0,
+                "pending_symbols_requested": bool(set(pending_symbols).issubset(manifest_symbols)) if pending_symbols else False,
+                "pending_symbol": symbol,
+                "latest_raw_5min_date_by_pending_symbol": latest_date,
+                "same_day_requested": same_day_requested,
+                "same_day_rows_received_count": same_day_rows,
+                "files_written_count": files_written_count,
+                "reason_if_no_2026_06_22_data": reason,
+            }
+        )
+    audit = ensure_columns(pd.DataFrame(rows), RAW_5MIN_UPDATE_AUDIT_COLUMNS, fill_value="")
+    csv_path = Path(latest_dir) / "raw_5min_update_audit_report.csv"
+    md_path = Path(latest_dir) / "raw_5min_update_audit_report.md"
+    audit.to_csv(csv_path, index=False)
+    summary = {
+        "raw_5min_update_called": raw_update_called,
+        "provider_source_used": provider_source,
+        "requested_symbols_count": int(len(manifest)) if not manifest.empty else 0,
+        "pending_symbols_requested": bool(set(pending_symbols).issubset(manifest_symbols)) if pending_symbols else False,
+        "same_day_requested": same_day_requested,
+        "same_day_rows_received_count": same_day_rows_received_count,
+        "files_written_count": files_written_count,
+        "reason_if_no_2026_06_22_data": "; ".join(sorted(set(audit["reason_if_no_2026_06_22_data"].dropna().astype(str)))) if not audit.empty else "no_pending_symbols",
+    }
+    lines = [
+        "# Raw 5min Update Audit Report",
+        "",
+        f"- raw_5min_update_called: {str(summary['raw_5min_update_called']).lower()}",
+        f"- provider/source used: {summary['provider_source_used']}",
+        f"- requested_symbols_count: {summary['requested_symbols_count']}",
+        f"- pending_symbols_requested: {str(summary['pending_symbols_requested']).lower()}",
+        f"- same_day_requested: {str(summary['same_day_requested']).lower()}",
+        f"- same_day_rows_received_count: {summary['same_day_rows_received_count']}",
+        f"- files_written_count: {summary['files_written_count']}",
+        f"- reason_if_no_2026_06_22_data: {summary['reason_if_no_2026_06_22_data']}",
+        "",
+        _readable_table(audit),
+        "",
+    ]
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+    return summary, audit
+
+
+def run_paper_5min_fill_check(data_folder="hisseler", report_output_dir="reports", make_chatgpt_report=False):
+    latest_dir, _run_dir = _report_output_paths(report_output_dir, data_folder)
+    orders = _pending_5min_diagnostic_orders(latest_dir)
+    raw_dir = _raw_5min_dir(data_folder)
+    rows = []
+    for _, order in orders.iterrows():
+        symbol = str(order.get("symbol", "")).strip().upper()
+        signal_date = order.get("signal_date", "")
+        status_value = order.get("fill_status", "") if "fill_status" in order else ""
+        if not str(status_value).strip():
+            status_value = order.get("status", "")
+        raw_path = raw_dir / f"{symbol}_5min.csv"
+        warning = ""
+        raw_latest_timestamp = ""
+        raw_latest_date = ""
+        fill_timestamp = None
+        fill_price = pd.NA
+        if not raw_path.exists():
+            warning = "missing_raw_5min_file"
+        else:
+            try:
+                raw_frame = _normalize_frame(raw_path)
+                if raw_frame.empty:
+                    warning = "empty_raw_5min_file"
+                else:
+                    raw_latest_timestamp = str(raw_frame.index.max())
+                    raw_latest_date = str(raw_frame.index.max().date())
+                    fill_timestamp, fill_price = _first_rth_5min_fill(raw_frame, signal_date)
+                    if fill_timestamp is None:
+                        warning = "missing_2026_06_22_rth_bar_after_signal_date"
+            except Exception as error:
+                warning = f"raw_5min_read_error:{error}"
+        has_next_open = fill_timestamp is not None and pd.notna(fill_price)
+        rows.append(
+            {
+                "symbol": symbol,
+                "strategy_name": order.get("strategy_name", ""),
+                "signal_date": signal_date,
+                "pending_status": status_value,
+                "raw_5min_latest_timestamp": raw_latest_timestamp,
+                "raw_5min_latest_date": raw_latest_date,
+                "has_next_open_5min": bool(has_next_open),
+                "hypothetical_fill_timestamp": str(fill_timestamp) if fill_timestamp is not None else "",
+                "hypothetical_fill_price": fill_price,
+                "warning": warning,
+                "would_fill_if_5min_enabled": bool(has_next_open),
+            }
+        )
+    check = ensure_columns(pd.DataFrame(rows), PAPER_5MIN_FILL_CHECK_COLUMNS, fill_value="")
+    summary = _paper_5min_fill_check_summary(check)
+    _write_paper_5min_fill_check_report(
+        check,
+        summary,
+        latest_dir / "paper_5min_fill_check_report.csv",
+        latest_dir / "paper_5min_fill_check_report.md",
+    )
+    if make_chatgpt_report:
+        _write_paper_5min_master_section(latest_dir, summary)
+    _write_raw_5min_update_audit_report(data_folder, latest_dir, orders)
+    print(f"Paper 5min fill check report: {latest_dir / 'paper_5min_fill_check_report.md'}")
+    print(f"Official state mutated: {str(summary['official_state_mutated']).lower()}")
+    print("submit_order_called: false")
+    print("POST: false")
+    return summary, check
 
 
 def _remove_optional_report_files(*directories):
@@ -2762,6 +3535,14 @@ def _paper_order_review_columns():
     return PAPER_ORDER_REVIEW_COLUMNS
 
 
+def _data_policy_decision_columns():
+    return DATA_POLICY_DECISION_COLUMNS
+
+
+def _data_policy_review_evidence_columns():
+    return DATA_POLICY_REVIEW_EVIDENCE_COLUMNS
+
+
 def _paper_main_strategy_name():
     return "rs_m126_top30_sma100_no_regime"
 
@@ -2896,6 +3677,8 @@ def _paper_signal_rows_for_result(
                 "entry_price_reference": close,
                 "assumed_fill_rule": "next_available_open",
                 "next_open_available": next_open_available,
+                "fill_bar_timestamp": "",
+                "fill_price_source": "next_130min_open",
                 "max_positions": max_positions,
             }
         )
@@ -2984,6 +3767,27 @@ def _run_paper_signal_report(
     return output[_paper_signal_columns()]
 
 
+def _block_new_signal_generation_on_daily_mismatch(paper_report, daily_dir, intraday_dir):
+    latest_daily = _latest_csv_data_date(daily_dir)
+    latest_130min = _latest_csv_data_date(intraday_dir)
+    if latest_daily == latest_130min or paper_report is None or paper_report.empty:
+        return paper_report
+    output = paper_report.copy()
+    new_signal_mask = output.get("is_new_signal", pd.Series(False, index=output.index)).astype(bool)
+    actionable_mask = output.get("paper_actionable", pd.Series(False, index=output.index)).astype(bool)
+    action = output.get("action", pd.Series("", index=output.index)).astype(str).str.upper()
+    target = new_signal_mask & actionable_mask & action.isin(["BUY", "SELL"])
+    output.loc[target, "paper_actionable"] = False
+    output.loc[target, "fill_status"] = "NOT_APPLICABLE"
+    output.loc[target, "user_decision"] = "HOLD_REVIEW"
+    marker = "new_signal_generation_blocked_by_daily_130min_mismatch"
+    for index in output[target].index:
+        reason = str(output.loc[index, "reason"] or "")
+        if marker not in reason:
+            output.loc[index, "reason"] = f"{reason};{marker}" if reason else marker
+    return output
+
+
 def _write_paper_signal_report(paper_report, csv_path, markdown_path):
     paper_report = ensure_columns(paper_report, _paper_signal_columns(), fill_value=pd.NA)
     paper_report.to_csv(csv_path, index=False)
@@ -3058,21 +3862,100 @@ def _ensure_paper_trade_log(path):
     return write_trade_log(Path(path).parent, read_trade_log(Path(path).parent))
 
 
+def _clean_note(value):
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"nan", "none", "<na>"} else text
+
+
 def _next_open_for_signal(asset_data, symbol, signal_date):
+    fill = _next_open_fill_for_signal(asset_data, symbol, signal_date)
+    return fill["fill_price"]
+
+
+def _raw_5min_path_for_asset(frame, symbol):
+    intraday_dir = frame.attrs.get("intraday_data_dir") if frame is not None else None
+    if not intraday_dir:
+        return None
+    return Path(intraday_dir).parent / "raw_5min" / f"{str(symbol).upper()}_5min.csv"
+
+
+def _fresh_130min_frame_for_symbol(frame, symbol):
+    intraday_dir = frame.attrs.get("intraday_data_dir") if frame is not None else None
+    if not intraday_dir:
+        return None
+    path = Path(intraday_dir) / f"{str(symbol).upper()}_130min.csv"
+    if not path.exists():
+        return None
+    try:
+        fresh = _normalize_frame(path)
+    except Exception:
+        return None
+    fresh.attrs["intraday_data_dir"] = str(intraday_dir)
+    return fresh
+
+
+def _bar_130min_complete_from_raw(frame, symbol, bar_timestamp):
+    raw_path = _raw_5min_path_for_asset(frame, symbol)
+    if raw_path is None:
+        return True
+    if not raw_path.exists():
+        return False
+    try:
+        raw = pd.read_csv(raw_path, usecols=["Date"])
+    except Exception:
+        return False
+    raw_dates = pd.to_datetime(raw["Date"], errors="coerce", utc=True).dropna()
+    if raw_dates.empty:
+        return False
+    bar_ts = pd.Timestamp(bar_timestamp)
+    if bar_ts.tzinfo is None:
+        bar_ts = bar_ts.tz_localize("America/New_York")
+    else:
+        bar_ts = bar_ts.tz_convert("America/New_York")
+    local_dates = raw_dates.dt.tz_convert("America/New_York")
+    minute = bar_ts.hour * 60 + bar_ts.minute
+    if minute == 9 * 60 + 30:
+        required_last = bar_ts + pd.Timedelta(minutes=125)
+    elif minute == 11 * 60 + 40:
+        required_last = bar_ts + pd.Timedelta(minutes=125)
+    elif minute == 13 * 60 + 50:
+        required_last = bar_ts + pd.Timedelta(minutes=125)
+    else:
+        return False
+    return bool((local_dates >= required_last).any())
+
+
+def _next_open_fill_for_signal(asset_data, symbol, signal_date):
     frame = asset_data.get(str(symbol).upper())
+    empty = {"fill_price": pd.NA, "fill_bar_timestamp": "", "fill_price_source": "next_130min_open"}
     if frame is None or frame.empty or "Open" not in frame:
-        return pd.NA
+        return empty
     ts = pd.Timestamp(signal_date)
-    index = frame.index
-    if index.tz is not None and ts.tzinfo is None:
-        ts = ts.tz_localize(index.tz)
-    elif index.tz is None and ts.tzinfo is not None:
-        ts = ts.tz_convert(None)
-    pos = index.searchsorted(ts, side="right")
-    if pos >= len(index):
-        return pd.NA
-    value = frame.iloc[pos].get("Open", pd.NA)
-    return pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    candidates = [frame]
+    fresh = _fresh_130min_frame_for_symbol(frame, symbol)
+    if fresh is not None and not fresh.empty:
+        candidates.append(fresh)
+    for candidate in candidates:
+        index = candidate.index
+        candidate_ts = ts
+        if index.tz is not None and candidate_ts.tzinfo is None:
+            candidate_ts = candidate_ts.tz_localize(index.tz)
+        elif index.tz is None and candidate_ts.tzinfo is not None:
+            candidate_ts = candidate_ts.tz_convert(None)
+        pos = index.searchsorted(candidate_ts, side="right")
+        while pos < len(index):
+            value = candidate.iloc[pos].get("Open", pd.NA)
+            price = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+            if pd.notna(price) and _bar_130min_complete_from_raw(candidate, symbol, index[pos]):
+                return {
+                    "fill_price": price,
+                    "fill_bar_timestamp": str(index[pos]),
+                    "fill_price_source": "next_130min_open",
+                }
+            pos += 1
+    return empty
 
 
 def _apply_paper_order_review(paper_report, review, trade_log_path, asset_data):
@@ -3108,10 +3991,13 @@ def _apply_paper_order_review(paper_report, review, trade_log_path, asset_data):
         decision = decision_by_key.get(key, "HOLD_REVIEW")
         output.loc[index, "user_decision"] = decision
         if decision == "ACCEPT":
-            fill_price = _next_open_for_signal(asset_data, row.get("symbol"), row.get("signal_date"))
+            fill = _next_open_fill_for_signal(asset_data, row.get("symbol"), row.get("signal_date"))
+            fill_price = fill["fill_price"]
             if pd.notna(fill_price):
                 fill_status = "PAPER_FILLED"
                 output.loc[index, "fill_status"] = fill_status
+                output.loc[index, "fill_bar_timestamp"] = fill["fill_bar_timestamp"]
+                output.loc[index, "fill_price_source"] = fill["fill_price_source"]
                 shares = round(float(row.get("paper_position_notional", 0.0)) / float(fill_price), 6) if float(fill_price) > 0 else 0.0
                 log_key = (
                     str(row.get("strategy_name", "")),
@@ -3136,7 +4022,15 @@ def _apply_paper_order_review(paper_report, review, trade_log_path, asset_data):
                             "paper_capital": row.get("paper_capital_assumption", pd.NA),
                             "reason": row.get("reason", ""),
                             "liquidity_guard_pass": row.get("liquidity_guard_pass", pd.NA),
-                            "notes": notes_by_key.get(key, ""),
+                            "notes": ";".join(
+                                item
+                                for item in [
+                                    _clean_note(notes_by_key.get(key, "")),
+                                    f"fill_bar_timestamp={fill['fill_bar_timestamp']}",
+                                    f"fill_price_source={fill['fill_price_source']}",
+                                ]
+                                if item
+                            ),
                         }
                     )
             else:
@@ -3274,9 +4168,12 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
                 if "latest_review_not_accept" not in reason:
                     carried["reason"] = f"{reason};latest_review_not_accept" if reason else "latest_review_not_accept"
         else:
-            fill_price = _next_open_for_signal(asset_data, row.get("symbol"), row.get("signal_date"))
+            fill = _next_open_fill_for_signal(asset_data, row.get("symbol"), row.get("signal_date"))
+            fill_price = fill["fill_price"]
             if pd.notna(fill_price):
                 carried["fill_status"] = "PAPER_FILLED"
+                carried["fill_bar_timestamp"] = fill["fill_bar_timestamp"]
+                carried["fill_price_source"] = fill["fill_price_source"]
                 log_key = (*order_id, "PAPER_FILLED")
                 if log_key not in existing_log_keys:
                     shares = round(float(row.get("paper_position_notional", 0.0)) / float(fill_price), 6) if float(fill_price) > 0 else 0.0
@@ -3295,7 +4192,15 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
                             "paper_capital": row.get("paper_capital_assumption", pd.NA),
                             "reason": row.get("reason", ""),
                             "liquidity_guard_pass": row.get("liquidity_guard_pass", pd.NA),
-                            "notes": notes_by_key.get(review_key, ""),
+                            "notes": ";".join(
+                                item
+                                for item in [
+                                    _clean_note(notes_by_key.get(review_key, "")),
+                                    f"fill_bar_timestamp={fill['fill_bar_timestamp']}",
+                                    f"fill_price_source={fill['fill_price_source']}",
+                                ]
+                                if item
+                            ),
                         }
                     )
             else:
@@ -3558,17 +4463,48 @@ def _paper_run_counts(paper_report):
     }
 
 
+def _paper_fill_gate_summary(paper_report):
+    if paper_report is None or paper_report.empty:
+        filled_from_130min = 0
+        pending_next_open = 0
+    else:
+        fill_status = paper_report.get("fill_status", pd.Series(dtype=str)).astype(str).str.upper()
+        source = paper_report.get("fill_price_source", pd.Series("", index=paper_report.index)).astype(str)
+        filled_from_130min = int((fill_status.eq("PAPER_FILLED") & source.eq("next_130min_open")).sum())
+        pending_next_open = int(fill_status.eq("PENDING_NEXT_OPEN").sum())
+    status = "OK" if filled_from_130min > 0 and pending_next_open == 0 else ("WARNING" if pending_next_open else "OK")
+    return {
+        "paper_fill_gate_status": status,
+        "paper_fill_gate_daily_required": False,
+        "paper_fill_gate_130min_required": True,
+        "daily_mismatch_blocks_paper_fill": False,
+        "daily_mismatch_blocks_new_signals": True,
+        "filled_from_130min_next_open_count": filled_from_130min,
+    }
+
+
 def _daily_preflight_status(paper_report, trade_log_path, daily_dir, intraday_dir, data_update_ran=False):
     stale_status = _paper_stale_status(paper_report)
     fill_counts = paper_report["fill_status"].value_counts().to_dict() if paper_report is not None and not paper_report.empty else {}
     decision_counts = paper_report["user_decision"].value_counts().to_dict() if paper_report is not None and not paper_report.empty else {}
     log_rows = 0
+    log_filled_rows = 0
     if Path(trade_log_path).exists():
         try:
-            log_rows = len(pd.read_csv(trade_log_path))
+            trade_log = pd.read_csv(trade_log_path)
+            log_rows = len(trade_log)
+            log_filled_rows = int(
+                trade_log.get("fill_status", pd.Series(dtype=str)).astype(str).str.upper().eq("PAPER_FILLED").sum()
+            )
         except Exception:
             log_rows = 0
+            log_filled_rows = 0
     run_counts = _paper_run_counts(paper_report)
+    fill_gate = _paper_fill_gate_summary(paper_report)
+    fill_gate["filled_from_130min_next_open_count"] = max(
+        int(fill_gate.get("filled_from_130min_next_open_count", 0) or 0),
+        log_filled_rows,
+    )
     pending_next_open = int(fill_counts.get("PENDING_NEXT_OPEN", 0))
     stale = bool(stale_status["stale_data_warning"])
     return {
@@ -3582,8 +4518,9 @@ def _daily_preflight_status(paper_report, trade_log_path, daily_dir, intraday_di
         "pending_next_open_count": pending_next_open,
         "paper_trade_log_rows": log_rows,
         "data_update_ran": bool(data_update_ran),
-        "filled_count_this_run": run_counts["filled"],
+        "filled_count_this_run": max(run_counts["filled"], log_filled_rows),
         "rejected_count_this_run": run_counts["rejected"],
+        **fill_gate,
         "next_action": (
             "Wait for next open data; accepted orders remain PENDING_NEXT_OPEN."
             if pending_next_open
@@ -3604,6 +4541,12 @@ def _write_daily_preflight_report(status, path):
         f"- pending_order_count: {status['pending_order_count']}",
         f"- accepted_order_count: {status['accepted_order_count']}",
         f"- pending_next_open_count: {status['pending_next_open_count']}",
+        f"- paper_fill_gate_status: {status['paper_fill_gate_status']}",
+        f"- paper_fill_gate_daily_required: {str(status['paper_fill_gate_daily_required']).lower()}",
+        f"- paper_fill_gate_130min_required: {str(status['paper_fill_gate_130min_required']).lower()}",
+        f"- daily_mismatch_blocks_paper_fill: {str(status['daily_mismatch_blocks_paper_fill']).lower()}",
+        f"- daily_mismatch_blocks_new_signals: {str(status['daily_mismatch_blocks_new_signals']).lower()}",
+        f"- filled_from_130min_next_open_count: {status['filled_from_130min_next_open_count']}",
         f"- paper_trade_log rows: {status['paper_trade_log_rows']}",
         f"- next action: {status['next_action']}",
         "",
@@ -3726,6 +4669,39 @@ def _data_precheck_policy_decisions(actions):
     return decisions
 
 
+def _data_policy_key(row):
+    return (
+        str(row.get("symbol", "")).strip().upper(),
+        str(row.get("warning", "")).strip(),
+    )
+
+
+def _write_data_policy_decision_file(policy_decisions, path):
+    path = Path(path)
+    existing = pd.DataFrame()
+    if path.exists():
+        try:
+            existing = pd.read_csv(path)
+        except Exception:
+            existing = pd.DataFrame()
+    existing_operator = {}
+    existing_notes = {}
+    for _, row in existing.iterrows():
+        key = _data_policy_key(row)
+        existing_operator[key] = str(row.get("operator_decision", "REVIEW_REQUIRED")).strip().upper() or "REVIEW_REQUIRED"
+        existing_notes[key] = row.get("operator_note", "")
+    rows = []
+    for decision in policy_decisions:
+        key = _data_policy_key(decision)
+        output = dict(decision)
+        output["operator_decision"] = existing_operator.get(key, "REVIEW_REQUIRED")
+        output["operator_note"] = existing_notes.get(key, "")
+        rows.append(output)
+    frame = ensure_columns(pd.DataFrame(rows), _data_policy_decision_columns())
+    frame.to_csv(path, index=False)
+    return frame
+
+
 def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, path):
     warnings = []
     critical = []
@@ -3778,12 +4754,19 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
         warnings.append("latest_daily_130min_date_mismatch")
     actions = _data_precheck_actions(rows, latest_daily, latest_130min)
     policy_decisions = _data_precheck_policy_decisions(actions)
+    policy_decision_path = Path(path).with_name("data_policy_decisions.csv")
+    policy_decision_frame = _write_data_policy_decision_file(policy_decisions, policy_decision_path)
+    policy_decision_display_path = (
+        "reports/latest/data_policy_decisions.csv"
+        if policy_decision_path.parent.name == "latest"
+        else str(policy_decision_path)
+    )
     result = {
         "status": "CRITICAL" if critical else ("WARNING" if warnings else "OK"),
         "warnings": sorted(set(warnings)),
         "critical": sorted(set(critical)),
         "recommended_actions": actions,
-        "policy_decisions": policy_decisions,
+        "policy_decisions": policy_decision_frame.to_dict("records"),
     }
     lines = [
         "# Data Precheck Report",
@@ -3794,7 +4777,8 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
         f"- critical_warnings: {', '.join(result['critical']) if result['critical'] else 'none'}",
         f"- warnings: {', '.join(result['warnings']) if result['warnings'] else 'none'}",
         f"- recommended_action_count: {len(actions)}",
-        f"- policy_decision_count: {len(policy_decisions)}",
+        f"- policy_decision_count: {len(policy_decision_frame)}",
+        f"- data_policy_decisions_path: {policy_decision_display_path}",
         "",
         "## Symbol Checks",
         "",
@@ -3806,7 +4790,14 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
         "",
         "## Data Policy Decisions",
         "",
-        _readable_table(pd.DataFrame(policy_decisions)) if policy_decisions else "none",
+        _readable_table(policy_decision_frame) if not policy_decision_frame.empty else "none",
+        "",
+        "## Operator Decision Guide",
+        "",
+        "- Edit operator_decision in data_policy_decisions.csv only after checking the source data issue.",
+        "- Resolving values require a non-empty operator_note: ACK, ACKNOWLEDGED, ALLOW, ALLOWED, REPAIRED, REPAIR_DONE, REMOVED, REMOVE_FROM_UNIVERSE.",
+        "- Blocking values: blank, REVIEW_REQUIRED, REJECT, REPAIR_REQUIRED, or any unrecognized value.",
+        "- operator_note should include the evidence or repair action used for the decision.",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -3954,6 +4945,19 @@ def _write_run_manifest(
     health = (operational_health or {}).get("pipeline_health", {})
     data_precheck = (operational_health or {}).get("data_precheck", {})
     regression = (operational_health or {}).get("regression_guard", {})
+    policy_decisions = data_precheck.get("policy_decisions", []) or []
+    blocking_policy_decisions = [
+        item for item in policy_decisions
+        if str(item.get("policy_status", "")).upper().startswith("BLOCK")
+    ]
+    if not data_precheck:
+        data_policy_status = "not_generated"
+    elif blocking_policy_decisions:
+        data_policy_status = "BLOCK"
+    elif policy_decisions:
+        data_policy_status = "REVIEW"
+    else:
+        data_policy_status = "OK"
     manifest = {
         "schema_version": 1,
         "run_datetime": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -3977,6 +4981,12 @@ def _write_run_manifest(
         "benchmark_changed": bool(health.get("benchmark_changed", False)),
         "warning_summary": health.get("warning_summary", "none"),
         "data_precheck_status": data_precheck.get("status", "not_generated"),
+        "data_policy_status": data_policy_status,
+        "data_policy_decision_count": len(policy_decisions),
+        "data_policy_blocking_count": len(blocking_policy_decisions),
+        "data_policy_blocking_symbols": sorted(
+            str(item.get("symbol", "")) for item in blocking_policy_decisions if item.get("symbol")
+        ),
         "regression_guard_status": regression.get("status", "not_generated"),
         "available_reports_latest": _report_file_names(latest_dir),
         "generated_reports_run": _report_file_names(run_dir),
@@ -3999,6 +5009,22 @@ def _chatgpt_operational_health_section(operational_health):
     schema_validation = operational_health.get("schema_validation", {})
     paper_state = operational_health.get("paper_state_validation", {})
     health = operational_health.get("pipeline_health", {})
+    policy_decisions = data_precheck.get("policy_decisions", []) or []
+    blocking_policy_decisions = [
+        item for item in policy_decisions
+        if str(item.get("policy_status", "")).upper().startswith("BLOCK")
+    ]
+    if not data_precheck:
+        data_policy_status = "not_generated"
+    elif blocking_policy_decisions:
+        data_policy_status = "BLOCK"
+    elif policy_decisions:
+        data_policy_status = "REVIEW"
+    else:
+        data_policy_status = "OK"
+    blocking_symbols = sorted(
+        str(item.get("symbol", "")) for item in blocking_policy_decisions if item.get("symbol")
+    )
     
     ret = [
         "## Operational Health",
@@ -4007,6 +5033,11 @@ def _chatgpt_operational_health_section(operational_health):
         f"- latest data dates: daily={health.get('latest_daily_date', 'none')}, 130min={health.get('latest_130min_date', 'none')}",
         f"- pending order aging: max_calendar_days={aging.get('max_calendar_days', 0)}, max_trading_days={aging.get('max_trading_days', 0)}, stale_count={aging.get('stale_count', 0)}",
         f"- data precheck warnings: {', '.join(data_precheck.get('critical', []) + data_precheck.get('warnings', [])) or 'none'}",
+        f"- data_policy_status: {data_policy_status}",
+        f"- data_policy_decision_count: {len(policy_decisions)}",
+        f"- data_policy_blocking_count: {len(blocking_policy_decisions)}",
+        f"- data_policy_blocking_symbols: {', '.join(blocking_symbols) or 'none'}",
+        "- data_policy_decisions_path: reports/latest/data_policy_decisions.csv",
         f"- regression guard status: {regression.get('status', 'not_generated')}",
         f"- report_schema_validation_status: {schema_validation.get('status', 'not_generated')}",
         f"- report_schema_validation_report_path: {schema_validation.get('path', 'reports/latest/report_schema_validation_report.md')}",
@@ -4062,6 +5093,12 @@ def _write_report_schema_validation_report(latest_dir, path):
         ("paper_trade_log.csv", PAPER_TRADE_LOG_COLUMNS),
         ("pipeline_health_log.csv", PIPELINE_HEALTH_COLUMNS),
     ]
+    data_policy_decisions = Path(latest_dir) / "data_policy_decisions.csv"
+    if data_policy_decisions.exists():
+        checks.append(("data_policy_decisions.csv", DATA_POLICY_DECISION_COLUMNS))
+    data_policy_evidence = Path(latest_dir) / "data_policy_review_evidence.csv"
+    if data_policy_evidence.exists():
+        checks.append(("data_policy_review_evidence.csv", DATA_POLICY_REVIEW_EVIDENCE_COLUMNS))
     alpaca_preview = Path(latest_dir) / "alpaca_order_preview.csv"
     if alpaca_preview.exists():
         checks.append(("alpaca_order_preview.csv", ALPACA_ORDER_PREVIEW_COLUMNS))
@@ -4155,6 +5192,12 @@ def _chatgpt_daily_pipeline_status_section(daily_pipeline_status):
         f"- stale warning: {daily_pipeline_status['stale_data_warning']}",
         f"- pending next open count: {daily_pipeline_status['pending_next_open_count']}",
         f"- filled count this run: {daily_pipeline_status['filled_count_this_run']}",
+        f"- paper_fill_gate_status: {daily_pipeline_status['paper_fill_gate_status']}",
+        f"- paper_fill_gate_daily_required: {str(daily_pipeline_status['paper_fill_gate_daily_required']).lower()}",
+        f"- paper_fill_gate_130min_required: {str(daily_pipeline_status['paper_fill_gate_130min_required']).lower()}",
+        f"- daily_mismatch_blocks_paper_fill: {str(daily_pipeline_status['daily_mismatch_blocks_paper_fill']).lower()}",
+        f"- daily_mismatch_blocks_new_signals: {str(daily_pipeline_status['daily_mismatch_blocks_new_signals']).lower()}",
+        f"- filled_from_130min_next_open_count: {daily_pipeline_status['filled_from_130min_next_open_count']}",
         f"- rejected count this run: {daily_pipeline_status['rejected_count_this_run']}",
         f"- next action: {daily_pipeline_status['next_action']}",
         "",
@@ -4203,6 +5246,8 @@ def _chatgpt_paper_readiness_section(paper_report):
         "action",
         "fill_status",
         "user_decision",
+        "fill_bar_timestamp",
+        "fill_price_source",
         "paper_actionable",
         "paper_rank",
         "ranking_score",
@@ -4230,6 +5275,12 @@ def _chatgpt_paper_readiness_section(paper_report):
         f"- rejected_order_count: {int(decision_counts.get('REJECT', 0))}",
         f"- hold_review_count: {int(decision_counts.get('HOLD_REVIEW', 0))}",
         f"- pending_next_open_count: {pending_next_open_count}",
+        f"- filled_from_130min_next_open_count: {_paper_fill_gate_summary(paper_report)['filled_from_130min_next_open_count']}",
+        f"- paper_fill_gate_status: {_paper_fill_gate_summary(paper_report)['paper_fill_gate_status']}",
+        "- paper_fill_gate_daily_required: false",
+        "- paper_fill_gate_130min_required: true",
+        "- daily_mismatch_blocks_paper_fill: false",
+        "- daily_mismatch_blocks_new_signals: true",
         "- paper_pending_orders_path: reports/latest/paper_pending_orders.csv",
         "- paper_order_review_path: reports/latest/paper_order_review.csv",
         "- paper_trade_log_path: reports/latest/paper_trade_log.csv",
@@ -4879,6 +5930,7 @@ def _chatgpt_existing_execution_readiness_section(latest_dir):
     latest_dir = Path(latest_dir)
     preview_path = latest_dir / "execution_preview_report.md"
     pre_submit_path = latest_dir / "pre_submit_readiness_report.md"
+    pre_submit_csv_path = latest_dir / "pre_submit_readiness_report.csv"
     audit_path = latest_dir / "execution_audit_log.csv"
     if not (preview_path.exists() and pre_submit_path.exists() and audit_path.exists()):
         return []
@@ -4892,6 +5944,18 @@ def _chatgpt_existing_execution_readiness_section(latest_dir):
     if not audit.empty and "event_type" in audit:
         submit_order_called = audit["event_type"].astype(str).str.contains("SUBMIT_ORDER", case=False, na=False).any()
         post_request_used = audit["event_type"].astype(str).str.contains("POST", case=False, na=False).any()
+    data_policy_status = "not_generated"
+    data_policy_value = "not_generated"
+    if pre_submit_csv_path.exists():
+        try:
+            pre_submit = pd.read_csv(pre_submit_csv_path)
+            row = pre_submit[pre_submit.get("check_name", pd.Series(dtype=str)).astype(str).eq("data_policy_operator_review")]
+            if not row.empty:
+                data_policy_status = str(row.iloc[0].get("status", "not_generated"))
+                data_policy_value = str(row.iloc[0].get("value", "not_generated"))
+        except Exception:
+            data_policy_status = "read_error"
+            data_policy_value = "read_error"
     return [
         "## Execution Bot Readiness",
         "",
@@ -4903,6 +5967,8 @@ def _chatgpt_existing_execution_readiness_section(latest_dir):
         f"- risk_pass_count: {_markdown_bullet_value(preview_path, 'risk passed count', '0')}",
         f"- would_submit_count: {_markdown_bullet_value(preview_path, 'would_submit count', '0')}",
         f"- submit_allowed: {_markdown_bullet_value(pre_submit_path, 'submit_allowed', 'False')}",
+        f"- data_policy_operator_review_status: {data_policy_status}",
+        f"- data_policy_operator_review_unresolved_count: {data_policy_value}",
         f"- submit_order_called: {str(bool(submit_order_called)).lower()}",
         f"- post_request_used: {str(bool(post_request_used)).lower()}",
         "- next action: Review pre-submit blocks and keep broker_submit_enabled false until explicit approval.",
@@ -4919,6 +5985,7 @@ def _chatgpt_useful_commands_section():
         "- Daily paper pipeline: `scripts/run_daily_paper_pipeline.bat`",
         "- Test suite: `scripts/run_tests.bat`",
         "- Paper report only: `scripts/run_paper_report.bat`",
+        "- Data policy review: `scripts/run_data_policy_review.bat`",
         "- Basic backtest: `scripts/run_basic.bat`",
         "- Alpaca paper check: `scripts/run_alpaca_check.bat`",
         "- Full diagnostic: `scripts/run_full_diagnostic.bat`",
@@ -4936,7 +6003,30 @@ def _chatgpt_useful_commands_section():
 
 
 def _write_execution_bot_readiness_section(latest_dir, summary):
-    path = Path(latest_dir) / "chatgpt_master_report.md"
+    latest_dir = Path(latest_dir)
+    path = latest_dir / "chatgpt_master_report.md"
+    data_policy_status = "not_generated"
+    data_policy_value = "not_generated"
+    pre_submit_checks = summary.get("pre_submit_checks")
+    if pre_submit_checks is not None and not getattr(pre_submit_checks, "empty", True):
+        row = pre_submit_checks[
+            pre_submit_checks.get("check_name", pd.Series(dtype=str)).astype(str).eq("data_policy_operator_review")
+        ]
+        if not row.empty:
+            data_policy_status = str(row.iloc[0].get("status", "not_generated"))
+            data_policy_value = str(row.iloc[0].get("value", "not_generated"))
+    elif (latest_dir / "pre_submit_readiness_report.csv").exists():
+        try:
+            pre_submit_checks = pd.read_csv(latest_dir / "pre_submit_readiness_report.csv")
+            row = pre_submit_checks[
+                pre_submit_checks.get("check_name", pd.Series(dtype=str)).astype(str).eq("data_policy_operator_review")
+            ]
+            if not row.empty:
+                data_policy_status = str(row.iloc[0].get("status", "not_generated"))
+                data_policy_value = str(row.iloc[0].get("value", "not_generated"))
+        except Exception:
+            data_policy_status = "read_error"
+            data_policy_value = "read_error"
     section = [
         "## Execution Bot Readiness",
         "",
@@ -4960,6 +6050,8 @@ def _write_execution_bot_readiness_section(latest_dir, summary):
         f"- warning_checks_count: {int(summary.get('warning_checks_count', 0) or 0)}",
         f"- would_submit_count: {int(summary.get('would_submit_count', 0) or 0)}",
         "- submit_allowed: false",
+        f"- data_policy_operator_review_status: {data_policy_status}",
+        f"- data_policy_operator_review_unresolved_count: {data_policy_value}",
         f"- reason submit not allowed: {summary.get('reason_submit_not_allowed', 'Submit intentionally disabled.')}",
         f"- pre_submit_readiness_report_path: {summary.get('pre_submit_readiness_report_path', 'reports/latest/pre_submit_readiness_report.md')}",
         f"- execution_preview_report_path: {summary.get('execution_preview_report_path', 'reports/latest/execution_preview_report.md')}",
@@ -5680,6 +6772,11 @@ def run_strategy_experiments(
             paper_strategy_mode=paper_strategy,
             include_watchlist=paper_include_watchlist,
             paper_max_new_positions_per_day=paper_max_new_positions_per_day,
+        )
+        paper_signal_report = _block_new_signal_generation_on_daily_mismatch(
+            paper_signal_report,
+            daily_dir,
+            intraday_dir,
         )
         _ensure_paper_trade_log(latest_dir / "paper_trade_log.csv")
         paper_order_review = _write_paper_order_review(
