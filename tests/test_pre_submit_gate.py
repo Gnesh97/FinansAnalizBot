@@ -31,6 +31,8 @@ class PreSubmitGateTest(unittest.TestCase):
             "local_state_execution_preview_match": True,
             "data_precheck_status": "OK",
             "data_precheck_warning_summary": "none",
+            "data_policy_unresolved_count": 0,
+            "data_policy_blocking_symbols": "none",
             "short_trading_enabled": False,
             "short_intents_count": 0,
             "short_blocked_count": 0,
@@ -127,6 +129,19 @@ class PreSubmitGateTest(unittest.TestCase):
         self.assertEqual(row["status"], "BLOCK")
         self.assertIn("dow_empty_daily", row["message"])
 
+    def test_data_policy_unresolved_blocks_submit_readiness(self):
+        checks = build_pre_submit_checks(
+            self._summary(
+                data_policy_unresolved_count=2,
+                data_policy_blocking_symbols="BK,PSA",
+            )
+        )
+        row = checks[checks["check_name"].eq("data_policy_operator_review")].iloc[0]
+        self.assertEqual(row["status"], "BLOCK")
+        self.assertIn("BK,PSA", row["message"])
+        self.assertIn("ACKNOWLEDGED", row["message"])
+        self.assertIn("REMOVE_FROM_UNIVERSE", row["message"])
+
     def test_summary_reads_data_precheck_status_from_run_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             latest = Path(tmp)
@@ -137,6 +152,43 @@ class PreSubmitGateTest(unittest.TestCase):
             summary = build_summary_from_latest(latest, self._summary())
             self.assertEqual(summary["data_precheck_status"], "WARNING")
             self.assertEqual(summary["data_precheck_warning_summary"], "psa_zero_volume")
+
+    def test_summary_reads_unresolved_data_policy_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            (latest / "data_policy_decisions.csv").write_text(
+                "\n".join(
+                    [
+                        "symbol,warning,policy_status,recommended_policy_action,operator_decision,operator_note",
+                        "BK,early_daily_end,BLOCK_UNTIL_POLICY_ACK,confirm,REVIEW_REQUIRED,",
+                        "PSA,psa_zero_volume,BLOCK_UNTIL_POLICY_ACK,inspect,ACKNOWLEDGED,",
+                        "PARA,early_daily_end,BLOCK_UNTIL_POLICY_ACK,confirm,REPAIR_REQUIRED,",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            summary = build_summary_from_latest(latest, self._summary())
+            self.assertEqual(summary["data_policy_decision_count"], 3)
+            self.assertEqual(summary["data_policy_unresolved_count"], 3)
+            self.assertEqual(summary["data_policy_blocking_symbols"], "BK,PARA,PSA")
+
+    def test_resolving_data_policy_decision_requires_operator_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            (latest / "data_policy_decisions.csv").write_text(
+                "\n".join(
+                    [
+                        "symbol,warning,policy_status,recommended_policy_action,operator_decision,operator_note",
+                        "BK,early_daily_end,BLOCK_UNTIL_POLICY_ACK,confirm,ACKNOWLEDGED,",
+                        "PSA,psa_zero_volume,BLOCK_UNTIL_POLICY_ACK,inspect,ACKNOWLEDGED,checked vendor row",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            summary = build_summary_from_latest(latest, self._summary())
+            self.assertEqual(summary["data_policy_decision_count"], 2)
+            self.assertEqual(summary["data_policy_unresolved_count"], 1)
+            self.assertEqual(summary["data_policy_blocking_symbols"], "BK")
 
 
 if __name__ == "__main__":

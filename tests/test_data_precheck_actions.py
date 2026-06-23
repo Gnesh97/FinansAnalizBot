@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 from testdata.runner import _write_data_precheck_report
 
 
@@ -45,6 +47,18 @@ class DataPrecheckActionsTest(unittest.TestCase):
             _write_daily(daily / "PSA_1D.csv", volume=0)
             _write_daily(daily / "QQQ_1D.csv")
             _write_daily(daily / "SPY_1D.csv")
+            pd.DataFrame(
+                [
+                    {
+                        "symbol": "BK",
+                        "warning": "early_daily_end",
+                        "policy_status": "BLOCK_UNTIL_POLICY_ACK",
+                        "recommended_policy_action": "confirm_delisted_renamed_or_remove_from_trading_universe",
+                        "operator_decision": "ACKNOWLEDGED",
+                        "operator_note": "known pending corporate-action review",
+                    }
+                ]
+            ).to_csv(root / "data_policy_decisions.csv", index=False)
 
             result = _write_data_precheck_report(
                 None,
@@ -69,6 +83,15 @@ class DataPrecheckActionsTest(unittest.TestCase):
             self.assertIn("## Data Policy Decisions", report_text)
             self.assertIn("recommended_action_count: 3", report_text)
             self.assertIn("policy_decision_count: 3", report_text)
+            self.assertIn("data_policy_decisions_path:", report_text)
+            self.assertIn("## Operator Decision Guide", report_text)
+            self.assertIn("Resolving values require a non-empty operator_note", report_text)
+            policy_file = pd.read_csv(root / "data_policy_decisions.csv")
+            self.assertEqual(len(policy_file), 3)
+            bk = policy_file[policy_file["symbol"].eq("BK")].iloc[0]
+            self.assertEqual(bk["operator_decision"], "ACKNOWLEDGED")
+            self.assertEqual(bk["operator_note"], "known pending corporate-action review")
+            self.assertIn("operator_decision", policy_file.columns)
 
 
 if __name__ == "__main__":

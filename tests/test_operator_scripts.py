@@ -44,6 +44,9 @@ class OperatorScriptsTest(unittest.TestCase):
         required = [
             "reports\\latest\\daily_preflight_report.md",
             "reports\\latest\\data_precheck_report.md",
+            "reports\\latest\\data_policy_decisions.csv",
+            "reports\\latest\\data_policy_review_report.md",
+            "reports\\latest\\data_policy_review_evidence.csv",
             "reports\\latest\\regression_guard_report.md",
             "reports\\latest\\pipeline_health_log.csv",
             "reports\\latest\\run_manifest.json",
@@ -72,6 +75,15 @@ class OperatorScriptsTest(unittest.TestCase):
         self.assertNotIn("pytest", text.lower())
         self.assertIn('"testdata/execution_engine.py"', wrapper)
         self.assertIn('"testdata/alpaca_paper_broker.py"', wrapper)
+        self.assertIn('"testdata/data_policy_review.py"', wrapper)
+
+    def test_data_policy_review_helper_points_to_operator_files(self):
+        text = _script_text("run_data_policy_review.bat")
+        self.assertIn("python data_policy_review.py", text)
+        self.assertIn("reports\\latest\\data_policy_decisions.csv", text)
+        self.assertIn("reports\\latest\\data_policy_review_report.md", text)
+        self.assertIn("reports\\latest\\data_policy_review_evidence.csv", text)
+        self.assertIn("reports\\latest\\pre_submit_readiness_report.md", text)
 
 
 if __name__ == "__main__":

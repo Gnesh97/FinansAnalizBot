@@ -24,6 +24,7 @@ class RunManifestTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            (latest_dir / "paper_pending_orders.csv").write_text("symbol\nBK\nPSA\n", encoding="utf-8")
             manifest = _write_run_manifest(
                 latest_dir,
                 run_dir,
@@ -35,6 +36,15 @@ class RunManifestTest(unittest.TestCase):
                 root / "cache.pkl",
                 {"prepared_disk_cache_hits": 2, "prepared_disk_cache_misses": 1, "symbols_loaded": 1, "rows_loaded": 2},
                 1.23456,
+                {
+                    "data_precheck": {
+                        "status": "WARNING",
+                        "policy_decisions": [
+                            {"symbol": "BK", "policy_status": "BLOCK_UNTIL_POLICY_ACK"},
+                            {"symbol": "PSA", "policy_status": "BLOCK_UNTIL_POLICY_ACK"},
+                        ],
+                    }
+                },
             )
 
             latest_manifest = json.loads((latest_dir / "run_manifest.json").read_text(encoding="utf-8"))
@@ -47,6 +57,38 @@ class RunManifestTest(unittest.TestCase):
             self.assertIn("run_manifest.json", latest_manifest["available_reports_latest"])
             self.assertIn("strategy_compact_report.csv", latest_manifest["generated_reports_run"])
             self.assertEqual(run_manifest["run_dir"], str(run_dir))
+            self.assertEqual(run_manifest["data_policy_status"], "BLOCK")
+            self.assertEqual(run_manifest["data_policy_decision_count"], 2)
+            self.assertEqual(run_manifest["data_policy_blocking_count"], 2)
+            self.assertEqual(run_manifest["data_policy_blocking_symbols"], ["BK", "PSA"])
+
+    def test_write_run_manifest_marks_missing_data_policy_not_generated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest_dir = root / "reports" / "latest"
+            run_dir = root / "reports" / "runs" / "2026-01-02_030405"
+            daily_dir = root / "hisseler" / "daily"
+            intraday_dir = root / "hisseler" / "bars_130min"
+            for directory in [latest_dir, run_dir, daily_dir, intraday_dir]:
+                directory.mkdir(parents=True)
+
+            manifest = _write_run_manifest(
+                latest_dir,
+                run_dir,
+                "python universe_scanner.py --reports basic",
+                "basic",
+                {},
+                daily_dir,
+                intraday_dir,
+                None,
+                {},
+                0.0,
+            )
+
+            self.assertEqual(manifest["data_precheck_status"], "not_generated")
+            self.assertEqual(manifest["data_policy_status"], "not_generated")
+            self.assertEqual(manifest["data_policy_decision_count"], 0)
+            self.assertEqual(manifest["data_policy_blocking_count"], 0)
 
 
 if __name__ == "__main__":

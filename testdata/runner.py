@@ -5104,6 +5104,127 @@ def _report_file_names(directory):
     return files + ["run_manifest.json"]
 
 
+def _active_symbols(latest_dir):
+    active = set()
+    latest_dir = Path(latest_dir)
+    # Trade log positions
+    trade_log_path = latest_dir / "paper_trade_log.csv"
+    if trade_log_path.exists():
+        try:
+            df = pd.read_csv(trade_log_path)
+            if not df.empty:
+                filled = df[df["fill_status"].astype(str).str.upper().eq("PAPER_FILLED")]
+                active.update(filled["symbol"].dropna().astype(str).str.upper().unique())
+        except Exception:
+            pass
+    # Pending orders
+    pending_path = latest_dir / "paper_pending_orders.csv"
+    if pending_path.exists():
+        try:
+            df = pd.read_csv(pending_path)
+            if not df.empty:
+                active.update(df["symbol"].dropna().astype(str).str.upper().unique())
+        except Exception:
+            pass
+    # Review orders
+    review_path = latest_dir / "paper_order_review.csv"
+    if review_path.exists():
+        try:
+            df = pd.read_csv(review_path)
+            if not df.empty:
+                active.update(df["symbol"].dropna().astype(str).str.upper().unique())
+        except Exception:
+            pass
+    return active
+
+
+def _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir):
+    try:
+        from .data_policy_exceptions import DATA_POLICY_EXCEPTIONS
+    except ImportError:
+        try:
+            from data_policy_exceptions import DATA_POLICY_EXCEPTIONS
+        except ImportError:
+            DATA_POLICY_EXCEPTIONS = {}
+
+    active_syms = _active_symbols(latest_dir)
+    
+    # Check PSA repair status
+    psa_repaired = False
+    psa_daily_file = Path(daily_dir) / "PSA_1D.csv"
+    if psa_daily_file.exists():
+        try:
+            df_psa = pd.read_csv(psa_daily_file)
+            if not df_psa.empty and "2026-06-22" in str(df_psa["Date"].iloc[-1]):
+                psa_repaired = True
+        except Exception:
+            pass
+
+    blocking_decisions = []
+    active_blocking_symbols = []
+    inactive_exception_symbols = []
+    
+    safe_exception_count = 0
+    redownload_required_count = 0
+    manual_review_count = 0
+
+    for item in policy_decisions:
+        symbol = str(item.get("symbol", "")).strip().upper()
+        warning = str(item.get("warning", "")).strip()
+        status_str = str(item.get("policy_status", "")).upper()
+        
+        # Determine categories
+        if symbol in {"BK", "PARA"}:
+            safe_exception_count += 1
+        elif symbol == "PSA":
+            redownload_required_count += 1
+        else:
+            if status_str.startswith("BLOCK"):
+                manual_review_count += 1
+
+        is_blocking = status_str.startswith("BLOCK")
+        if is_blocking:
+            # Check exceptions
+            exception = DATA_POLICY_EXCEPTIONS.get(symbol, {})
+            if exception and exception.get("category") == "SAFE_KNOWN_EXCEPTION":
+                if symbol not in active_syms:
+                    inactive_exception_symbols.append(symbol)
+                    continue  # do not block
+            
+            if symbol == "PSA":
+                repair_report_file = Path(latest_dir) / "data_policy_repair_report.csv"
+                repair_attempted = repair_report_file.exists()
+                if repair_attempted:
+                    if psa_repaired:
+                        inactive_exception_symbols.append(symbol)
+                        continue  # do not block
+                    else:
+                        if symbol not in active_syms:
+                            inactive_exception_symbols.append(symbol)
+                            continue  # do not block
+                # If not repair_attempted, it falls through to block
+
+            blocking_decisions.append(item)
+            active_blocking_symbols.append(symbol)
+
+    if blocking_decisions:
+        data_policy_status = "BLOCK"
+    elif policy_decisions:
+        data_policy_status = "WARNING"
+    else:
+        data_policy_status = "OK"
+
+    return {
+        "status": data_policy_status,
+        "blocking_decisions": blocking_decisions,
+        "active_blocking_symbols": sorted(set(active_blocking_symbols)),
+        "inactive_exception_symbols": sorted(set(inactive_exception_symbols)),
+        "safe_known_exception_count": safe_exception_count,
+        "data_redownload_required_count": redownload_required_count,
+        "manual_review_required_count": manual_review_count,
+    }
+
+
 def _write_run_manifest(
     latest_dir,
     run_dir,
@@ -5121,18 +5242,16 @@ def _write_run_manifest(
     data_precheck = (operational_health or {}).get("data_precheck", {})
     regression = (operational_health or {}).get("regression_guard", {})
     policy_decisions = data_precheck.get("policy_decisions", []) or []
-    blocking_policy_decisions = [
-        item for item in policy_decisions
-        if str(item.get("policy_status", "")).upper().startswith("BLOCK")
-    ]
+    
     if not data_precheck:
         data_policy_status = "not_generated"
-    elif blocking_policy_decisions:
-        data_policy_status = "BLOCK"
-    elif policy_decisions:
-        data_policy_status = "REVIEW"
+        blocking_policy_decisions = []
+        blocking_symbols = []
     else:
-        data_policy_status = "OK"
+        eval_res = _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir)
+        data_policy_status = eval_res["status"]
+        blocking_policy_decisions = eval_res["blocking_decisions"]
+        blocking_symbols = eval_res["active_blocking_symbols"]
     manifest = {
         "schema_version": 1,
         "run_datetime": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -5185,21 +5304,27 @@ def _chatgpt_operational_health_section(operational_health):
     paper_state = operational_health.get("paper_state_validation", {})
     health = operational_health.get("pipeline_health", {})
     policy_decisions = data_precheck.get("policy_decisions", []) or []
-    blocking_policy_decisions = [
-        item for item in policy_decisions
-        if str(item.get("policy_status", "")).upper().startswith("BLOCK")
-    ]
+    
+    daily_dir = health.get("daily_data_dir", "hisseler/daily")
+    latest_dir = health.get("latest_dir", "reports/latest")
     if not data_precheck:
         data_policy_status = "not_generated"
-    elif blocking_policy_decisions:
-        data_policy_status = "BLOCK"
-    elif policy_decisions:
-        data_policy_status = "REVIEW"
+        safe_known_exception_count = 0
+        data_redownload_required_count = 0
+        manual_review_required_count = 0
+        active_blocking_symbols = []
+        inactive_exception_symbols = []
+        blocking_policy_decisions = []
     else:
-        data_policy_status = "OK"
-    blocking_symbols = sorted(
-        str(item.get("symbol", "")) for item in blocking_policy_decisions if item.get("symbol")
-    )
+        eval_res = _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir)
+        
+        data_policy_status = eval_res["status"]
+        safe_known_exception_count = eval_res["safe_known_exception_count"]
+        data_redownload_required_count = eval_res["data_redownload_required_count"]
+        manual_review_required_count = eval_res["manual_review_required_count"]
+        active_blocking_symbols = eval_res["active_blocking_symbols"]
+        inactive_exception_symbols = eval_res["inactive_exception_symbols"]
+        blocking_policy_decisions = eval_res["blocking_decisions"]
     
     ret = [
         "## Operational Health",
@@ -5211,7 +5336,12 @@ def _chatgpt_operational_health_section(operational_health):
         f"- data_policy_status: {data_policy_status}",
         f"- data_policy_decision_count: {len(policy_decisions)}",
         f"- data_policy_blocking_count: {len(blocking_policy_decisions)}",
-        f"- data_policy_blocking_symbols: {', '.join(blocking_symbols) or 'none'}",
+        f"- data_policy_blocking_symbols: {', '.join(active_blocking_symbols) or 'none'}",
+        f"- safe_known_exception_count: {safe_known_exception_count}",
+        f"- data_redownload_required_count: {data_redownload_required_count}",
+        f"- manual_review_required_count: {manual_review_required_count}",
+        f"- active_blocking_symbols: {', '.join(active_blocking_symbols) or 'none'}",
+        f"- inactive_exception_symbols: {', '.join(inactive_exception_symbols) or 'none'}",
         "- data_policy_decisions_path: reports/latest/data_policy_decisions.csv",
         "- data_policy_review_report_path: reports/latest/data_policy_review_report.md",
         "- data_policy_review_evidence_path: reports/latest/data_policy_review_evidence.csv",
