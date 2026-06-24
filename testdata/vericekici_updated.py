@@ -95,6 +95,16 @@ def get_credentials() -> tuple[str, str]:
     return api_key, secret_key
 
 
+def resolve_date_end(end_arg: str) -> datetime:
+    return parse_utc_date(end_arg)
+
+
+def resolve_intraday_end(end_arg: str) -> datetime:
+    if str(end_arg).strip().lower() == "today":
+        return datetime.now(timezone.utc)
+    return parse_utc_date(end_arg)
+
+
 def parse_utc_date(value: str) -> datetime:
     if str(value).strip().lower() == "today":
         return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -207,6 +217,17 @@ def aggregate_to_130min(raw_5min: pd.DataFrame) -> pd.DataFrame:
         for session, block in zip(session_start, output["block"])
     ]
     output["Date"] = pd.to_datetime(output["Date"], utc=True)
+    block_end_minutes = {0: 11 * 60 + 39, 1: 13 * 60 + 49, 2: 15 * 60 + 59}
+    now_ny = pd.Timestamp.now(tz=NEW_YORK)
+    keep_indices = []
+    for idx, row in output.iterrows():
+        session_val = row["session"]
+        block_val = int(row["block"])
+        session_ts = pd.Timestamp(session_val).tz_localize(NEW_YORK)
+        block_end = session_ts + pd.Timedelta(minutes=block_end_minutes[block_val])
+        if now_ny >= block_end:
+            keep_indices.append(idx)
+    output = output.loc[keep_indices].reset_index(drop=True)
     return output[["Date", "Open", "High", "Low", "Close", "Volume"]].dropna().reset_index(drop=True)
 
 
@@ -345,6 +366,8 @@ def _download_symbol_worker(payload: dict) -> dict:
         "daily_provider_rows": 0,
         "raw_provider_rows": 0,
         "new_rows_added": 0,
+        "current_session_received": 0,
+        "current_session_added": 0,
         "warnings": [],
         "error": "",
         "runtime_sec": 0.0,
@@ -358,7 +381,8 @@ def _download_symbol_worker(payload: dict) -> dict:
         adjustment = payload["adjustment"]
         day_tf = payload["day_tf"]
         min5_tf = payload["min5_tf"]
-        end = payload["end"]
+        daily_end = payload["daily_end"]
+        intraday_end = payload["intraday_end"]
 
         if daily_path.exists() and not overwrite and not refresh_latest:
             result["daily_status"] = "skipped"
@@ -368,7 +392,7 @@ def _download_symbol_worker(payload: dict) -> dict:
             daily_start = payload["daily_start"]
             if refresh_latest and latest is not None and not overwrite:
                 daily_start = max(payload["daily_start"], (latest - pd.Timedelta(days=10)).to_pydatetime())
-            daily = download_bars_with_retry(api_key, secret_key, symbol, daily_start, end, day_tf, feed, adjustment, False)
+            daily = download_bars_with_retry(api_key, secret_key, symbol, daily_start, daily_end, day_tf, feed, adjustment, False)
             status, provider_rows, added, warning = refresh_file(daily_path, daily, refresh_latest, overwrite, symbol, "daily", allow_row_count_reduction)
             result["daily_status"] = status
             result["daily_provider_rows"] = provider_rows
@@ -384,11 +408,27 @@ def _download_symbol_worker(payload: dict) -> dict:
             intraday_start = payload["intraday_start"]
             if refresh_latest and latest is not None and not overwrite:
                 intraday_start = max(payload["intraday_start"], (latest - pd.Timedelta(days=5)).to_pydatetime())
-            raw_5min = download_bars_with_retry(api_key, secret_key, symbol, intraday_start, end, min5_tf, feed, adjustment, True)
+            raw_5min = download_bars_with_retry(api_key, secret_key, symbol, intraday_start, intraday_end, min5_tf, feed, adjustment, True)
             status, provider_rows, added, warning = refresh_file(raw_path, raw_5min, refresh_latest, overwrite, symbol, "raw_5min", allow_row_count_reduction)
             result["raw_5min_status"] = status
             result["raw_provider_rows"] = provider_rows
             result["new_rows_added"] += added
+            
+            # Calculate current session stats
+            if not raw_5min.empty:
+                dates_str = raw_5min["Date"].astype(str)
+                result["current_session_received"] = int(dates_str.str.contains("2026-06-23").sum())
+            else:
+                result["current_session_received"] = 0
+                
+            # Check how many are in the final saved file
+            final_saved = read_existing_bars(raw_path)
+            if not final_saved.empty:
+                dates_str = final_saved["Date"].astype(str)
+                result["current_session_added"] = int(dates_str.str.contains("2026-06-23").sum())
+            else:
+                result["current_session_added"] = 0
+                
             if warning:
                 result["warnings"].append(warning)
     except Exception as exc:
@@ -524,6 +564,12 @@ def write_data_refresh_reports(
         f"- old_latest_130min_date: {summary.get('old_latest_130min_date', '')}",
         f"- new_latest_130min_date: {summary.get('new_latest_130min_date', '')}",
         f"- cache_invalidated: {summary.get('cache_invalidated', False)}",
+        f"- daily_requested_end: {summary.get('daily_requested_end', '')}",
+        f"- intraday_requested_end: {summary.get('intraday_requested_end', '')}",
+        f"- intraday_end_mode: {summary.get('intraday_end_mode', '')}",
+        f"- current_session_rows_received: {summary.get('current_session_rows_received', 0)}",
+        f"- current_session_new_rows_added: {summary.get('current_session_new_rows_added', 0)}",
+        f"- pending_symbols_current_session_rows: {summary.get('pending_symbols_current_session_rows', '')}",
         f"- total_runtime_sec: {summary.get('total_runtime_sec', 0)}",
         f"- download_runtime_sec: {summary.get('download_runtime_sec', 0)}",
         f"- aggregation_130min_runtime_sec: {summary.get('aggregation_130min_runtime_sec', 0)}",
@@ -596,7 +642,8 @@ def main() -> None:
     adjustment = get_adjustment(args.adjustment)
     daily_start = parse_utc_date(args.daily_start)
     intraday_start = parse_utc_date(args.intraday_start)
-    end = parse_utc_date(args.end)
+    daily_end = resolve_date_end(args.end)
+    intraday_end = resolve_intraday_end(args.end)
     day_tf = TimeFrame.Day if hasattr(TimeFrame, "Day") else TimeFrame(1, TimeFrameUnit.Day)
     min5_tf = TimeFrame(5, TimeFrameUnit.Minute)
     cpu_count = os.cpu_count() or 2
@@ -651,7 +698,8 @@ def main() -> None:
             "min5_tf": min5_tf,
             "daily_start": daily_start,
             "intraday_start": intraday_start,
-            "end": end,
+            "daily_end": daily_end,
+            "intraday_end": intraday_end,
             "refresh_latest": args.refresh_latest,
             "overwrite": args.overwrite,
             "skip_download": args.skip_download or args.only_aggregate_130min,
@@ -821,6 +869,17 @@ def main() -> None:
     total_runtime_sec = round(time.perf_counter() - total_start, 4)
     slowest = sorted(timing_rows, key=lambda item: item["total_symbol_runtime_sec"], reverse=True)[:10]
     slowest_symbols_top10 = ";".join(f"{item['symbol']}:{item['total_symbol_runtime_sec']}" for item in slowest)
+    current_session_rows_received = sum(row.get("current_session_received", 0) for row in download_results.values())
+    current_session_new_rows_added = sum(row.get("current_session_added", 0) for row in download_results.values())
+    
+    pending_symbols = {"AMD", "KLAC", "LRCX", "SMH", "SOXX"}
+    pending_parts = []
+    for row in download_results.values():
+        sym = row["symbol"]
+        if sym in pending_symbols:
+            pending_parts.append(f"{sym}:{row.get('current_session_added', 0)}")
+    pending_symbols_current_session_rows_str = ", ".join(pending_parts)
+    
     refresh_summary = {
         "refresh_mode": refresh_mode,
         "parallel_enabled": bool(args.parallel),
@@ -850,6 +909,12 @@ def main() -> None:
         "slowest_symbols_top10": slowest_symbols_top10,
         "warnings": ";".join(all_warnings),
         "errors": ";".join(all_errors),
+        "daily_requested_end": daily_end.isoformat(),
+        "intraday_requested_end": intraday_end.isoformat(),
+        "intraday_end_mode": "now" if args.end == "today" else "current_timestamp",
+        "current_session_rows_received": current_session_rows_received,
+        "current_session_new_rows_added": current_session_new_rows_added,
+        "pending_symbols_current_session_rows": pending_symbols_current_session_rows_str,
     }
     write_data_refresh_reports(BASE_DIR / "reports" / "latest", refresh_summary, records, timing_rows)
 

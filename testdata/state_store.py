@@ -67,7 +67,6 @@ def init_state_db(db_path):
                 );
             """)
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_orders_unique ON paper_orders(run_id, symbol, strategy_name, signal_date, action);")
-
             # Table 4: paper_trades
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS paper_trades (
@@ -89,6 +88,21 @@ def init_state_db(db_path):
                     notes TEXT
                 );
             """)
+            try:
+                conn.execute("""
+                    DELETE FROM paper_trades 
+                    WHERE id NOT IN (
+                        SELECT MIN(id) 
+                        FROM paper_trades 
+                        GROUP BY strategy_name, symbol, action, signal_date
+                    );
+                """)
+            except Exception as e_mig:
+                print(f"WARNING: failed to deduplicate SQLite paper_trades: {e_mig}")
+            try:
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_trades_unique ON paper_trades(strategy_name, symbol, action, signal_date);")
+            except Exception as e_idx:
+                print(f"WARNING: failed to create unique index on paper_trades: {e_idx}")
 
             # Table 5: order_intents
             conn.execute("""
@@ -267,12 +281,59 @@ def append_paper_trades(db_path, run_id, trades_data):
     """Inserts paper trades. Returns tuple (success, warning_msg)."""
     conn = None
     try:
+        from paper_state_manager import get_stable_key
+    except ImportError:
+        try:
+            from .paper_state_manager import get_stable_key
+        except ImportError:
+            # Fallback local implementation if imports fail
+            def get_stable_key(row):
+                import re
+                strategy_name = str(row.get("strategy_name") or row.get("strategy") or "").strip()
+                symbol = str(row.get("symbol") or "").strip().upper()
+                action = str(row.get("action") or "").strip().upper()
+                signal_date = str(row.get("signal_date") or "").strip()
+                notes = str(row.get("notes") or "")
+                fill_bar_timestamp = row.get("fill_bar_timestamp")
+                if fill_bar_timestamp is None or (hasattr(pd, "isna") and pd.isna(fill_bar_timestamp)) or str(fill_bar_timestamp) == "nan":
+                    m = re.search(r"fill_bar_timestamp=([^;]+)", notes)
+                    fill_bar_timestamp = m.group(1).strip() if m else ""
+                else:
+                    fill_bar_timestamp = str(fill_bar_timestamp).strip()
+                fill_price_source = row.get("fill_price_source")
+                if fill_price_source is None or (hasattr(pd, "isna") and pd.isna(fill_price_source)) or str(fill_price_source) == "nan":
+                    m = re.search(r"fill_price_source=([^;]+)", notes)
+                    fill_price_source = m.group(1).strip() if m else ""
+                else:
+                    fill_price_source = str(fill_price_source).strip()
+                return (strategy_name, symbol, action, signal_date, fill_bar_timestamp, fill_price_source)
+
+    try:
         records = _clean_records(trades_data)
         if not records:
             return True, None
         conn = connect_state_db(db_path)
+        existing_keys = set()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT strategy_name, symbol, action, signal_date, notes FROM paper_trades")
+            for row in cursor.fetchall():
+                row_dict = {
+                    "strategy_name": row[0],
+                    "symbol": row[1],
+                    "action": row[2],
+                    "signal_date": row[3],
+                    "notes": row[4]
+                }
+                existing_keys.add(get_stable_key(row_dict))
+        except Exception as e_read:
+            print(f"WARNING: failed to read existing paper_trades for deduplication: {e_read}")
+            
         with conn:
             for r in records:
+                key = get_stable_key(r)
+                if key in existing_keys:
+                    continue
                 conn.execute("""
                     INSERT OR IGNORE INTO paper_trades (
                         run_id, date, strategy_name, symbol, action, signal_date,
@@ -296,6 +357,7 @@ def append_paper_trades(db_path, run_id, trades_data):
                     r.get("liquidity_guard_pass"),
                     r.get("notes") or r.get("message")
                 ))
+                existing_keys.add(key)
         return True, None
     except Exception as e:
         msg = f"SQLite append_paper_trades failed: {e}"

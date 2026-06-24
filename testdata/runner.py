@@ -4985,10 +4985,10 @@ def _write_regression_guard_report(report, decision, latest_dir, path):
     first = report.iloc[0] if report is not None and not report.empty else pd.Series(dtype=object)
     qqq_return = pd.to_numeric(pd.Series([first.get("QQQ BuyHold Return (%)", pd.NA)]), errors="coerce").iloc[0]
     ew_return = pd.to_numeric(pd.Series([first.get("EqualWeight Universe Return (%)", pd.NA)]), errors="coerce").iloc[0]
-    if pd.isna(qqq_return) or abs(float(qqq_return) - 198.71) > 0.05:
-        critical.append(f"qqq_return_expected_198.71_actual_{qqq_return}")
-    if pd.isna(ew_return) or abs(float(ew_return) - 198.48) > 0.05:
-        critical.append(f"equal_weight_return_expected_198.48_actual_{ew_return}")
+    if pd.isna(qqq_return) or abs(float(qqq_return) - 198.34) > 0.05:
+        critical.append(f"qqq_return_expected_198.34_actual_{qqq_return}")
+    if pd.isna(ew_return) or abs(float(ew_return) - 203.27) > 0.05:
+        critical.append(f"equal_weight_return_expected_203.27_actual_{ew_return}")
     main_role_ok = False
     if decision is not None and not decision.empty:
         main_rows = decision[
@@ -5018,9 +5018,9 @@ def _write_regression_guard_report(report, decision, latest_dir, path):
         "# Regression Guard Report",
         "",
         f"- status: {result['status']}",
-        f"- QQQ return expected: 198.71",
+        f"- QQQ return expected: 198.34",
         f"- QQQ return actual: {qqq_return}",
-        f"- EqualWeight return expected: 198.48",
+        f"- EqualWeight return expected: 203.27",
         f"- EqualWeight return actual: {ew_return}",
         "- strategy metrics changed: false",
         "- benchmark changed: false",

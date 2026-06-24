@@ -106,12 +106,75 @@ def write_trade_log(reports_dir, df):
     )
 
 
+LAST_SKIPPED_DUPLICATE_FILL_COUNT = 0
+LAST_NEWLY_ADDED_COUNT = 0
+
+def reset_paper_ledger_counters():
+    global LAST_SKIPPED_DUPLICATE_FILL_COUNT, LAST_NEWLY_ADDED_COUNT
+    LAST_SKIPPED_DUPLICATE_FILL_COUNT = 0
+    LAST_NEWLY_ADDED_COUNT = 0
+
+def get_last_skipped_duplicate_fill_count():
+    return LAST_SKIPPED_DUPLICATE_FILL_COUNT
+
+def get_last_newly_added_count():
+    return LAST_NEWLY_ADDED_COUNT
+
+def get_stable_key(row):
+    import re
+    strategy_name = str(row.get("strategy_name") or row.get("strategy") or "").strip()
+    symbol = str(row.get("symbol") or "").strip().upper()
+    action = str(row.get("action") or "").strip().upper()
+    signal_date = str(row.get("signal_date") or "").strip()
+    
+    notes = str(row.get("notes") or "")
+    
+    fill_bar_timestamp = row.get("fill_bar_timestamp")
+    if fill_bar_timestamp is None or (hasattr(pd, "isna") and pd.isna(fill_bar_timestamp)) or str(fill_bar_timestamp) == "nan":
+        m = re.search(r"fill_bar_timestamp=([^;]+)", notes)
+        fill_bar_timestamp = m.group(1).strip() if m else ""
+    else:
+        fill_bar_timestamp = str(fill_bar_timestamp).strip()
+        
+    fill_price_source = row.get("fill_price_source")
+    if fill_price_source is None or (hasattr(pd, "isna") and pd.isna(fill_price_source)) or str(fill_price_source) == "nan":
+        m = re.search(r"fill_price_source=([^;]+)", notes)
+        fill_price_source = m.group(1).strip() if m else ""
+    else:
+        fill_price_source = str(fill_price_source).strip()
+        
+    return (strategy_name, symbol, action, signal_date, fill_bar_timestamp, fill_price_source)
+
+
 def append_trade_log(reports_dir, rows):
+    global LAST_SKIPPED_DUPLICATE_FILL_COUNT, LAST_NEWLY_ADDED_COUNT
     current = read_trade_log(reports_dir)
+    
+    existing_keys = set()
+    if not current.empty:
+        for _, row in current.iterrows():
+            existing_keys.add(get_stable_key(row))
+            
+    newly_added_rows = []
+    skipped = 0
     if rows:
-        new_rows = pd.DataFrame(rows)
-        current = new_rows if current.empty else pd.concat([current, new_rows], ignore_index=True)
-    return write_trade_log(reports_dir, current)
+        for r in rows:
+            key = get_stable_key(r)
+            if key in existing_keys:
+                skipped += 1
+            else:
+                newly_added_rows.append(r)
+                existing_keys.add(key)
+                
+        if newly_added_rows:
+            new_df = pd.DataFrame(newly_added_rows)
+            current = new_df if current.empty else pd.concat([current, new_df], ignore_index=True)
+            write_trade_log(reports_dir, current)
+            
+    LAST_SKIPPED_DUPLICATE_FILL_COUNT += skipped
+    LAST_NEWLY_ADDED_COUNT += len(newly_added_rows)
+    return current
+
 
 
 def create_trade_log_template(reports_dir):

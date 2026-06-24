@@ -11,6 +11,16 @@ except ImportError:
 
 PRE_SUBMIT_COLUMNS = ["check_name", "status", "value", "required_value", "message"]
 SHORT_READINESS_COLUMNS = PRE_SUBMIT_COLUMNS
+DATA_POLICY_RESOLVING_VALUES = {
+    "ACK",
+    "ACKNOWLEDGED",
+    "ALLOW",
+    "ALLOWED",
+    "REPAIRED",
+    "REPAIR_DONE",
+    "REMOVED",
+    "REMOVE_FROM_UNIVERSE",
+}
 
 
 def _bool_value(value):
@@ -46,6 +56,8 @@ def build_pre_submit_checks(summary):
     alpaca_positions_orders_ok = _bool_value(summary.get("alpaca_positions_orders_ok", False))
     data_precheck_status = str(summary.get("data_precheck_status", "UNKNOWN")).strip().upper()
     data_precheck_warning = str(summary.get("data_precheck_warning_summary", "none")).strip()
+    data_policy_unresolved_count = int(summary.get("data_policy_unresolved_count", 0) or 0)
+    data_policy_blocking_symbols = str(summary.get("data_policy_blocking_symbols", "none")).strip() or "none"
 
     rows = [
         _row(
@@ -152,6 +164,15 @@ def build_pre_submit_checks(summary):
             "OK",
             "Data precheck must be OK before submit readiness; warnings: "
             + (data_precheck_warning or "none"),
+        ),
+        _row(
+            "data_policy_operator_review",
+            "PASS" if data_policy_unresolved_count == 0 else "BLOCK",
+            data_policy_unresolved_count,
+            "0",
+            "Data policy decisions require operator ACK/repair before readiness; symbols: "
+            + data_policy_blocking_symbols
+            + ". Resolving values require non-empty operator_note: ACK, ACKNOWLEDGED, ALLOW, ALLOWED, REPAIRED, REPAIR_DONE, REMOVED, REMOVE_FROM_UNIVERSE.",
         ),
         _row(
             "short_submit_allowed",
@@ -264,6 +285,46 @@ def _latest_data_precheck_status(latest_path):
     return "UNKNOWN", "data_precheck_status_missing"
 
 
+def _latest_data_policy_review_summary(latest_path):
+    policy_path = Path(latest_path) / "data_policy_decisions.csv"
+    if not policy_path.exists():
+        return {
+            "data_policy_decision_count": 0,
+            "data_policy_unresolved_count": 0,
+            "data_policy_blocking_symbols": "none",
+        }
+    try:
+        policy = pd.read_csv(policy_path)
+    except Exception:
+        return {
+            "data_policy_decision_count": 0,
+            "data_policy_unresolved_count": 1,
+            "data_policy_blocking_symbols": "data_policy_decisions_read_error",
+        }
+    if policy.empty:
+        return {
+            "data_policy_decision_count": 0,
+            "data_policy_unresolved_count": 0,
+            "data_policy_blocking_symbols": "none",
+        }
+    operator_decision = policy.get("operator_decision", pd.Series("", index=policy.index)).fillna("").astype(str).str.upper().str.strip()
+    operator_note = policy.get("operator_note", pd.Series("", index=policy.index)).fillna("").astype(str).str.strip()
+    policy_status = policy.get("policy_status", pd.Series("", index=policy.index)).fillna("").astype(str).str.upper().str.strip()
+    blocking_policy = policy_status.str.startswith("BLOCK")
+    resolved = operator_decision.isin(DATA_POLICY_RESOLVING_VALUES) & operator_note.ne("")
+    unresolved = blocking_policy & ~resolved
+    symbols = sorted(
+        policy.loc[unresolved, "symbol"].fillna("").astype(str).str.upper().replace("", pd.NA).dropna().unique().tolist()
+        if "symbol" in policy
+        else []
+    )
+    return {
+        "data_policy_decision_count": int(len(policy)),
+        "data_policy_unresolved_count": int(unresolved.sum()),
+        "data_policy_blocking_symbols": ",".join(symbols) if symbols else "none",
+    }
+
+
 def build_summary_from_latest(latest_dir, preview_summary):
     latest_path = Path(latest_dir)
     summary = dict(preview_summary or {})
@@ -290,6 +351,7 @@ def build_summary_from_latest(latest_dir, preview_summary):
     data_precheck_status, data_precheck_warning = _latest_data_precheck_status(latest_path)
     summary["data_precheck_status"] = data_precheck_status
     summary["data_precheck_warning_summary"] = data_precheck_warning
+    summary.update(_latest_data_policy_review_summary(latest_path))
     return summary
 
 

@@ -17,6 +17,7 @@ COMPILE_TARGETS = [
     "testdata/runner.py",
     "testdata/execution_engine.py",
     "testdata/pre_submit_gate.py",
+    "testdata/data_policy_review.py",
     "testdata/risk_gate.py",
     "testdata/broker_interface.py",
     "testdata/alpaca_paper_broker.py",
