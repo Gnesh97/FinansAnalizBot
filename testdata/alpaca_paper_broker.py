@@ -57,4 +57,33 @@ class AlpacaPaperBroker(BrokerInterface):
         return payload
 
     def submit_order(self, order_intent):
-        raise RuntimeError("Order submission disabled in current build.")
+        return self.submit_paper_order(order_intent, paper_submit_enabled=False, confirm_token=None)
+
+    def submit_paper_order(self, order_intent, paper_submit_enabled=False, confirm_token=None):
+        if not paper_submit_enabled:
+            raise RuntimeError("Alpaca paper submit is disabled by default.")
+        if confirm_token != "CONFIRM_PAPER_SUBMIT":
+            raise ValueError("Invalid confirmation token.")
+        if "api.alpaca.markets" in self.base_url and "paper-api" not in self.base_url:
+            raise ValueError("Refusing Alpaca live connection.")
+        if "paper-api" not in self.base_url:
+            raise ValueError("Requires a paper-api base_url.")
+        side = str(order_intent.get("side", "")).lower()
+        if side != "buy":
+            raise ValueError("Only BUY orders are allowed in long paper submit layer.")
+
+        import json
+        payload = self.preview_order(order_intent)
+        url = self.base_url + "/v2/orders"
+        req = request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "APCA-API-KEY-ID": self.api_key,
+                "APCA-API-SECRET-KEY": self.secret_key,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with request.urlopen(req, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
