@@ -10,7 +10,7 @@ Su an hedef canli trading degil; local paper trading ve paper execution workflow
 ## 2. Current Working Directory / Main Files
 
 Calisma dizini:
-`C:\Users\polat\OneDrive\Masaustu\BOT\testdata`
+`C:\Users\polat\OneDrive\Masaüstü\BOT - Kopya\testdata`
 
 Ana dosyalar:
 
@@ -41,6 +41,8 @@ Legacy dosya varsa production'a import edilmemeli:
 * Canli emir yok.
 * Alpaca live endpoint yok.
 * Broker submit/order POST yok.
+* ECC ve Understand-Anything sadece tooling icindir; bot runtime veya stratejilere import edilemez.
+
 
 ## 4. Data Status
 
@@ -125,6 +127,12 @@ Key metrics:
 Important interpretation:
 Top10 has highest return but is too concentrated.
 Top30 is the current main candidate because it is more balanced.
+
+Note on Basic/Fast Validation Run vs. Final Candidates:
+* The final main candidate is `rs_m126_top30_sma100_no_regime`.
+* The basic/fast validation run (`VALIDATION_EXPERIMENTS` in `universe_scanner.py`) intentionally uses a smaller/different experiment set for quick health checks and may not include the M126 final candidate family.
+* Therefore, `final_candidate_decision_report.md` and `strategy_compact_report.md` can show different experiment universes in basic mode.
+* This is an intentional report-mode separation, not a strategy metric change.
 
 ## 7. Paper Trading State
 

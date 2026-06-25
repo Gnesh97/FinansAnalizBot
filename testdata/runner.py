@@ -565,8 +565,20 @@ def _pending_5min_refresh_orders(latest_dir):
     return _pending_5min_diagnostic_orders(latest_dir)
 
 
-def _first_rth_5min_fill(raw_frame, signal_date, target_date="2026-06-22"):
+def _paper_fill_target_date(order):
+    expected = pd.to_datetime(order.get("expected_next_open_date", ""), errors="coerce")
+    if pd.notna(expected):
+        return expected.date()
+    signal = pd.to_datetime(order.get("signal_date", ""), errors="coerce")
+    if pd.isna(signal):
+        return None
+    return _next_us_market_session(signal.date())
+
+
+def _first_rth_5min_fill(raw_frame, signal_date, target_date):
     if raw_frame is None or raw_frame.empty:
+        return None, pd.NA
+    if target_date is None:
         return None, pd.NA
     frame = raw_frame.sort_index()
     signal_timestamp = pd.to_datetime(signal_date, errors="coerce")
@@ -594,6 +606,21 @@ def _first_rth_5min_fill(raw_frame, signal_date, target_date="2026-06-22"):
     first_timestamp = candidates.index[0]
     price = pd.to_numeric(pd.Series([candidates.iloc[0].get("Open", pd.NA)]), errors="coerce").iloc[0]
     return first_timestamp, price
+
+
+def _paper_5min_missing_warning(raw_latest_date, target_date):
+    if target_date is None:
+        return "missing_expected_next_open_date"
+    target = pd.to_datetime(target_date).date()
+    latest = pd.to_datetime(raw_latest_date, errors="coerce")
+    if pd.isna(latest):
+        return f"missing_{target.isoformat()}_rth_bar_after_signal_date"
+    latest_date = latest.date()
+    if latest_date < target:
+        return f"latest_5min_before_target_date:{latest_date}_lt_{target}"
+    if latest_date > target:
+        return f"target_date_mismatch_or_missing_target_bar:{target}_latest_{latest_date}"
+    return f"missing_{target.isoformat()}_rth_bar_after_signal_date"
 
 
 def _paper_5min_fill_check_summary(check):
@@ -1206,12 +1233,15 @@ def run_paper_5min_fill_check(data_folder="hisseler", report_output_dir="reports
     orders = _pending_5min_diagnostic_orders(latest_dir)
     raw_dir = _raw_5min_dir(data_folder)
     rows = []
+    fill_log_rows = []
+    filled_order_indices = []
     for _, order in orders.iterrows():
         symbol = str(order.get("symbol", "")).strip().upper()
         signal_date = order.get("signal_date", "")
         status_value = order.get("fill_status", "") if "fill_status" in order else ""
         if not str(status_value).strip():
             status_value = order.get("status", "")
+        target_date = _paper_fill_target_date(order)
         raw_path = raw_dir / f"{symbol}_5min.csv"
         warning = ""
         raw_latest_timestamp = ""
@@ -1228,12 +1258,43 @@ def run_paper_5min_fill_check(data_folder="hisseler", report_output_dir="reports
                 else:
                     raw_latest_timestamp = str(raw_frame.index.max())
                     raw_latest_date = str(raw_frame.index.max().date())
-                    fill_timestamp, fill_price = _first_rth_5min_fill(raw_frame, signal_date)
+                    fill_timestamp, fill_price = _first_rth_5min_fill(raw_frame, signal_date, target_date)
                     if fill_timestamp is None:
-                        warning = "missing_2026_06_22_rth_bar_after_signal_date"
+                        warning = _paper_5min_missing_warning(raw_latest_date, target_date)
             except Exception as error:
                 warning = f"raw_5min_read_error:{error}"
         has_next_open = fill_timestamp is not None and pd.notna(fill_price)
+        if has_next_open:
+            filled_order_indices.append(order.name)
+            notional = pd.to_numeric(pd.Series([order.get("paper_position_notional", pd.NA)]), errors="coerce").iloc[0]
+            price = float(fill_price)
+            shares = round(float(notional) / price, 6) if pd.notna(notional) and price > 0 else 0.0
+            fill_log_rows.append(
+                {
+                    "date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "strategy_name": order.get("strategy_name", ""),
+                    "symbol": symbol,
+                    "action": order.get("action", ""),
+                    "signal_date": signal_date,
+                    "signal_price": pd.NA,
+                    "assumed_fill_price": fill_price,
+                    "fill_status": "PAPER_FILLED",
+                    "shares": shares,
+                    "notional": order.get("paper_position_notional", pd.NA),
+                    "paper_capital": order.get("paper_capital", pd.NA),
+                    "reason": order.get("reason", ""),
+                    "liquidity_guard_pass": order.get("liquidity_guard_pass", pd.NA),
+                    "notes": ";".join(
+                        item
+                        for item in [
+                            _clean_note(order.get("notes", "")),
+                            f"fill_bar_timestamp={fill_timestamp}",
+                            "fill_price_source=next_5min_open",
+                        ]
+                        if item
+                    ),
+                }
+            )
         rows.append(
             {
                 "symbol": symbol,
@@ -1251,6 +1312,13 @@ def run_paper_5min_fill_check(data_folder="hisseler", report_output_dir="reports
         )
     check = ensure_columns(pd.DataFrame(rows), PAPER_5MIN_FILL_CHECK_COLUMNS, fill_value="")
     summary = _paper_5min_fill_check_summary(check)
+    if fill_log_rows:
+        append_trade_log(latest_dir, fill_log_rows)
+        pending = read_pending_orders(latest_dir)
+        if not pending.empty:
+            pending = pending.drop(index=[idx for idx in filled_order_indices if idx in pending.index])
+            write_pending_orders(latest_dir, pending)
+        summary["official_state_mutated"] = True
     _write_paper_5min_fill_check_report(
         check,
         summary,

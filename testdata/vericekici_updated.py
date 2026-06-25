@@ -96,6 +96,8 @@ def get_credentials() -> tuple[str, str]:
 
 
 def resolve_date_end(end_arg: str) -> datetime:
+    if str(end_arg).strip().lower() == "today":
+        return datetime.now(timezone.utc)
     return parse_utc_date(end_arg)
 
 
