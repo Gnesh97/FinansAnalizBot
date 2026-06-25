@@ -69,10 +69,10 @@ def build_pre_submit_checks(summary):
         ),
         _row(
             "live_trading_enabled",
-            "PASS" if live_trading_enabled else "BLOCK",
+            "BLOCK" if live_trading_enabled else "PASS",
             live_trading_enabled,
-            True,
-            "Live trading is intentionally disabled.",
+            False,
+            "Live trading must remain disabled.",
         ),
         _row(
             "submit_order_called",
@@ -176,10 +176,10 @@ def build_pre_submit_checks(summary):
         ),
         _row(
             "short_submit_allowed",
-            "BLOCK" if not short_trading_enabled else "WARNING",
+            "PASS" if not short_trading_enabled else "WARNING",
             False,
             False,
-            "Short submit must remain disabled until short readiness is explicitly enabled.",
+            "Short submit remains disabled as required.",
         ),
     ]
     return pd.DataFrame(rows, columns=PRE_SUBMIT_COLUMNS)

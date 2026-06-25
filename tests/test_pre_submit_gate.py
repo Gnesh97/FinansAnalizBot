@@ -46,10 +46,15 @@ class PreSubmitGateTest(unittest.TestCase):
         row = checks[checks["check_name"].eq("broker_submit_enabled")].iloc[0]
         self.assertEqual(row["status"], "BLOCK")
 
-    def test_live_trading_disabled_blocks(self):
-        checks = build_pre_submit_checks(self._summary(live_trading_enabled=False))
+    def test_live_trading_enabled_blocks(self):
+        checks = build_pre_submit_checks(self._summary(live_trading_enabled=True))
         row = checks[checks["check_name"].eq("live_trading_enabled")].iloc[0]
         self.assertEqual(row["status"], "BLOCK")
+
+    def test_live_trading_disabled_passes(self):
+        checks = build_pre_submit_checks(self._summary(live_trading_enabled=False))
+        row = checks[checks["check_name"].eq("live_trading_enabled")].iloc[0]
+        self.assertEqual(row["status"], "PASS")
 
     def test_submit_and_post_false_pass(self):
         checks = build_pre_submit_checks(self._summary())
@@ -83,6 +88,13 @@ class PreSubmitGateTest(unittest.TestCase):
         result = short_readiness_summary(checks)
         self.assertEqual(result["short_readiness_status"], "BLOCK")
         self.assertFalse(result["short_submit_allowed"])
+
+    def test_short_submit_allowed_passes_when_short_disabled(self):
+        checks = build_pre_submit_checks(self._summary(short_trading_enabled=False))
+        row = checks[checks["check_name"].eq("short_submit_allowed")].iloc[0]
+        self.assertEqual(row["status"], "PASS")
+        self.assertEqual(row["required_value"], False)
+        self.assertEqual(row["value"], False)
 
     def test_alpaca_report_underscore_connection_ok_is_detected(self):
         with tempfile.TemporaryDirectory() as tmp:
