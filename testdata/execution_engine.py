@@ -74,7 +74,9 @@ def action_to_order_side(action):
     action = str(action).strip().upper()
     if action == "SELL":
         return "SELL"
-    return "BUY"
+    elif action == "BUY":
+        return "BUY"
+    return "INVALID_ACTION"
 
 
 def _accepted_pending_next_open_orders(pending_orders):
@@ -403,7 +405,7 @@ def _rewrite_execution_preview_summary(latest_path, summary):
     (latest_path / "execution_preview_report.md").write_text("\n".join(lines), encoding="utf-8")
 
 
-def run_execution_preview(latest_dir, max_new_orders_per_run=5, pre_submit_check=False):
+def run_execution_preview(latest_dir, max_new_orders_per_run=5, pre_submit_check=False, files_changed=None):
     pending = read_pending_orders(latest_dir)
     intents, accepted = build_order_intents(pending)
     risk = evaluate_order_risk(intents, accepted, max_new_orders_per_run=max_new_orders_per_run)
@@ -504,6 +506,7 @@ def run_execution_preview(latest_dir, max_new_orders_per_run=5, pre_submit_check
             commands_run=[
                 "python universe_scanner.py --execution-preview --pre-submit-check --make-chatgpt-report"
             ],
+            files_changed=files_changed,
         )
 
     return summary
@@ -518,15 +521,17 @@ def write_chatgpt_action_report(
     blocked_symbols,
     task_name=None,
     commands_run=None,
+    files_changed=None,
 ):
     import datetime
     report_path = latest_path / "chatgpt_action_report.md"
     
-    files_changed = [
-        "universe_scanner.py",
-        "testdata/execution_engine.py",
-        "tests/test_broker_submit_safety.py",
-    ]
+    if files_changed is None:
+        files_changed_str = "none"
+    elif isinstance(files_changed, list):
+        files_changed_str = ", ".join(files_changed)
+    else:
+        files_changed_str = str(files_changed)
     
     if task_name is None:
         task_name = "Paper Decision Apply / Action Report"
@@ -549,7 +554,7 @@ def write_chatgpt_action_report(
         "",
         f"1. Task name: {task_name}",
         f"2. Run datetime: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"3. Files changed: {', '.join(files_changed)}",
+        f"3. Files changed: {files_changed_str}",
         f"4. Commands run: {', '.join(f'`{c}`' for c in commands_run)}",
         f"5. Test result: {test_result}",
         "6. Strategy metrics changed: false",
@@ -578,6 +583,7 @@ def run_alpaca_paper_submit(
     make_chatgpt_report=False,
     max_submit_orders=1,
     max_submit_notional=25,
+    files_changed=None,
 ):
     import os
     latest_path = Path(latest_dir)
@@ -856,6 +862,7 @@ def run_alpaca_paper_submit(
         commands_run=[
             f"python universe_scanner.py --alpaca-paper-submit --max-submit-orders {max_submit_orders} --max-submit-notional {max_submit_notional} --make-chatgpt-report"
         ],
+        files_changed=files_changed,
     )
 
     print(f"Alpaca paper submit preview: {preview_path}")

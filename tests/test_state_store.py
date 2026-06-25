@@ -144,5 +144,50 @@ class TestStateStore(unittest.TestCase):
         summary = get_state_summary(self.db_path)
         self.assertEqual(summary["readiness_checks_count"], 2)
 
+    def test_append_paper_trades_deduplication(self):
+        init_state_db(self.db_path)
+        run_id = "run_123"
+        trades_1 = [{
+            "strategy_name": "test_strat",
+            "symbol": "MSFT",
+            "action": "BUY",
+            "signal_date": "2026-06-25",
+            "fill_bar_timestamp": "2026-06-25 09:30:00",
+            "fill_price_source": "next_5min_open",
+            "fill_status": "PAPER_FILLED",
+            "shares": 10,
+            "notional": 1000.0,
+            "paper_capital": 25000.0,
+            "reason": "testing",
+            "liquidity_guard_pass": True,
+            "notes": ""
+        }]
+        success1, err1 = append_paper_trades(self.db_path, run_id, trades_1)
+        self.assertTrue(success1)
+        self.assertIsNone(err1)
+
+        trades_2 = [{
+            "strategy_name": "test_strat",
+            "symbol": "MSFT",
+            "action": "BUY",
+            "signal_date": "2026-06-25",
+            "fill_bar_timestamp": "2026-06-25 09:35:00",
+            "fill_price_source": "next_130min_open",
+            "fill_status": "PAPER_FILLED",
+            "shares": 10,
+            "notional": 1000.0,
+            "paper_capital": 25000.0,
+            "reason": "testing",
+            "liquidity_guard_pass": True,
+            "notes": ""
+        }]
+        success2, err2 = append_paper_trades(self.db_path, run_id, trades_2)
+        self.assertTrue(success2)
+        self.assertIsNone(err2)
+
+        summary = get_state_summary(self.db_path)
+        self.assertEqual(summary["paper_trades_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

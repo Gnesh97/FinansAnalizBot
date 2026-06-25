@@ -288,25 +288,11 @@ def append_paper_trades(db_path, run_id, trades_data):
         except ImportError:
             # Fallback local implementation if imports fail
             def get_stable_key(row):
-                import re
                 strategy_name = str(row.get("strategy_name") or row.get("strategy") or "").strip()
                 symbol = str(row.get("symbol") or "").strip().upper()
                 action = str(row.get("action") or "").strip().upper()
                 signal_date = str(row.get("signal_date") or "").strip()
-                notes = str(row.get("notes") or "")
-                fill_bar_timestamp = row.get("fill_bar_timestamp")
-                if fill_bar_timestamp is None or (hasattr(pd, "isna") and pd.isna(fill_bar_timestamp)) or str(fill_bar_timestamp) == "nan":
-                    m = re.search(r"fill_bar_timestamp=([^;]+)", notes)
-                    fill_bar_timestamp = m.group(1).strip() if m else ""
-                else:
-                    fill_bar_timestamp = str(fill_bar_timestamp).strip()
-                fill_price_source = row.get("fill_price_source")
-                if fill_price_source is None or (hasattr(pd, "isna") and pd.isna(fill_price_source)) or str(fill_price_source) == "nan":
-                    m = re.search(r"fill_price_source=([^;]+)", notes)
-                    fill_price_source = m.group(1).strip() if m else ""
-                else:
-                    fill_price_source = str(fill_price_source).strip()
-                return (strategy_name, symbol, action, signal_date, fill_bar_timestamp, fill_price_source)
+                return (strategy_name, symbol, action, signal_date)
 
     try:
         records = _clean_records(trades_data)

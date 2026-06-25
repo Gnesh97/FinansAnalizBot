@@ -65,6 +65,42 @@ class PaperStateManagerTest(unittest.TestCase):
             self.assertEqual(log.iloc[0]["symbol"], "AAPL")
             self.assertEqual(log.iloc[0]["fill_status"], "PAPER_FILLED")
 
+    def test_append_trade_log_deduplicates_different_timestamps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reports_dir = Path(tmp)
+            append_trade_log(
+                reports_dir,
+                [
+                    {
+                        "date": "2026-06-20",
+                        "strategy_name": "test",
+                        "symbol": "AAPL",
+                        "action": "BUY",
+                        "signal_date": "2026-06-19",
+                        "fill_bar_timestamp": "2026-06-20 09:30:00",
+                        "fill_price_source": "next_5min_open",
+                        "fill_status": "PAPER_FILLED",
+                    }
+                ],
+            )
+            append_trade_log(
+                reports_dir,
+                [
+                    {
+                        "date": "2026-06-20",
+                        "strategy_name": "test",
+                        "symbol": "AAPL",
+                        "action": "BUY",
+                        "signal_date": "2026-06-19",
+                        "fill_bar_timestamp": "2026-06-20 09:35:00",
+                        "fill_price_source": "next_130min_open",
+                        "fill_status": "PAPER_FILLED",
+                    }
+                ],
+            )
+            log = read_trade_log(reports_dir)
+            self.assertEqual(len(log), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
