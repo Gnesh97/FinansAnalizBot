@@ -1,6 +1,9 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 from testdata.pre_submit_gate import (
+    build_summary_from_latest,
     build_pre_submit_checks,
     build_short_readiness_checks,
     readiness_summary,
@@ -26,6 +29,10 @@ class PreSubmitGateTest(unittest.TestCase):
             "alpaca_paper_connection_ok": True,
             "alpaca_positions_orders_ok": True,
             "local_state_execution_preview_match": True,
+            "data_precheck_status": "OK",
+            "data_precheck_warning_summary": "none",
+            "data_policy_unresolved_count": 0,
+            "data_policy_blocking_symbols": "none",
             "short_trading_enabled": False,
             "short_intents_count": 0,
             "short_blocked_count": 0,
@@ -56,14 +63,132 @@ class PreSubmitGateTest(unittest.TestCase):
 
     def test_valid_risk_pass_but_submit_allowed_false(self):
         checks = build_pre_submit_checks(self._summary(risk_pass_count=5))
-        self.assertEqual(checks[checks["check_name"].eq("risk_pass_count")].iloc[0]["status"], "PASS")
+        self.assertEqual(checks[checks["check_name"].eq("submit_candidate_risk_pass_count")].iloc[0]["status"], "PASS")
         self.assertFalse(readiness_summary(checks)["submit_allowed"])
+
+    def test_preview_duplicate_does_not_zero_submit_candidate_risk(self):
+        checks = build_pre_submit_checks(
+            self._summary(
+                risk_pass_count=0,
+                submit_candidate_risk_pass_count=5,
+                blocked_count=5,
+                preview_duplicate_count=5,
+            )
+        )
+        row = checks[checks["check_name"].eq("submit_candidate_risk_pass_count")].iloc[0]
+        self.assertEqual(row["status"], "PASS")
 
     def test_short_readiness_blocks_when_short_disabled(self):
         checks = build_short_readiness_checks(self._summary(short_trading_enabled=False))
         result = short_readiness_summary(checks)
         self.assertEqual(result["short_readiness_status"], "BLOCK")
         self.assertFalse(result["short_submit_allowed"])
+
+    def test_alpaca_report_underscore_connection_ok_is_detected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            (latest / "alpaca_paper_check_report.md").write_text(
+                "\n".join(
+                    [
+                        "- connection_status: ok",
+                        "- open_positions_count: 0",
+                        "- open_orders_count: 0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            summary = build_summary_from_latest(latest, self._summary())
+            self.assertTrue(summary["alpaca_paper_connection_ok"])
+            self.assertTrue(summary["alpaca_positions_orders_ok"])
+
+    def test_alpaca_positions_orders_do_not_pass_without_connection_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            (latest / "alpaca_paper_check_report.md").write_text(
+                "\n".join(
+                    [
+                        "- connection_status: missing_credentials",
+                        "- open_positions_count: 0",
+                        "- open_orders_count: 0",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            summary = build_summary_from_latest(latest, self._summary())
+            self.assertFalse(summary["alpaca_paper_connection_ok"])
+            self.assertFalse(summary["alpaca_positions_orders_ok"])
+
+    def test_data_precheck_warning_blocks_submit_readiness(self):
+        checks = build_pre_submit_checks(
+            self._summary(
+                data_precheck_status="WARNING",
+                data_precheck_warning_summary="dow_empty_daily",
+            )
+        )
+        row = checks[checks["check_name"].eq("data_precheck_status")].iloc[0]
+        self.assertEqual(row["status"], "BLOCK")
+        self.assertIn("dow_empty_daily", row["message"])
+
+    def test_data_policy_unresolved_blocks_submit_readiness(self):
+        checks = build_pre_submit_checks(
+            self._summary(
+                data_policy_unresolved_count=2,
+                data_policy_blocking_symbols="BK,PSA",
+            )
+        )
+        row = checks[checks["check_name"].eq("data_policy_operator_review")].iloc[0]
+        self.assertEqual(row["status"], "BLOCK")
+        self.assertIn("BK,PSA", row["message"])
+        self.assertIn("ACKNOWLEDGED", row["message"])
+        self.assertIn("REMOVE_FROM_UNIVERSE", row["message"])
+
+    def test_summary_reads_data_precheck_status_from_run_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            (latest / "run_manifest.json").write_text(
+                '{"data_precheck_status": "WARNING", "warning_summary": "psa_zero_volume"}',
+                encoding="utf-8",
+            )
+            summary = build_summary_from_latest(latest, self._summary())
+            self.assertEqual(summary["data_precheck_status"], "WARNING")
+            self.assertEqual(summary["data_precheck_warning_summary"], "psa_zero_volume")
+
+    def test_summary_reads_unresolved_data_policy_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            (latest / "data_policy_decisions.csv").write_text(
+                "\n".join(
+                    [
+                        "symbol,warning,policy_status,recommended_policy_action,operator_decision,operator_note",
+                        "BK,early_daily_end,BLOCK_UNTIL_POLICY_ACK,confirm,REVIEW_REQUIRED,",
+                        "PSA,psa_zero_volume,BLOCK_UNTIL_POLICY_ACK,inspect,ACKNOWLEDGED,",
+                        "PARA,early_daily_end,BLOCK_UNTIL_POLICY_ACK,confirm,REPAIR_REQUIRED,",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            summary = build_summary_from_latest(latest, self._summary())
+            self.assertEqual(summary["data_policy_decision_count"], 3)
+            self.assertEqual(summary["data_policy_unresolved_count"], 3)
+            self.assertEqual(summary["data_policy_blocking_symbols"], "BK,PARA,PSA")
+
+    def test_resolving_data_policy_decision_requires_operator_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            (latest / "data_policy_decisions.csv").write_text(
+                "\n".join(
+                    [
+                        "symbol,warning,policy_status,recommended_policy_action,operator_decision,operator_note",
+                        "BK,early_daily_end,BLOCK_UNTIL_POLICY_ACK,confirm,ACKNOWLEDGED,",
+                        "PSA,psa_zero_volume,BLOCK_UNTIL_POLICY_ACK,inspect,ACKNOWLEDGED,checked vendor row",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            summary = build_summary_from_latest(latest, self._summary())
+            self.assertEqual(summary["data_policy_decision_count"], 2)
+            self.assertEqual(summary["data_policy_unresolved_count"], 1)
+            self.assertEqual(summary["data_policy_blocking_symbols"], "BK")
 
 
 if __name__ == "__main__":

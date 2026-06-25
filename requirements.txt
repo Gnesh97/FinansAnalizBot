@@ -1,2 +1,6 @@
 alpaca-py
 pandas
+schedule
+matplotlib
+yfinance
+requests

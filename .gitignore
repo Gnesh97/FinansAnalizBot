@@ -39,9 +39,25 @@ Thumbs.db
 testdata/hisseler*/
 testdata/reports/
 testdata/backups/
+testdata/scratch/
 testdata/hisseler2/
 testdata/hisseler3/
 data/
 datasets/
 output/
 
+# SQLite state database
+testdata/state/*.sqlite3
+testdata/state/*.sqlite3-wal
+testdata/state/*.sqlite3-shm
+
+# Tooling repos and generated outputs
+ECC/
+.understand-anything/
+.agents/
+.claude/
+.codex/
+.cursor/
+node_modules/
+pnpm-lock.yaml
+skills-lock.json

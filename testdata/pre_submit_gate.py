@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pandas as pd
 
@@ -10,6 +11,16 @@ except ImportError:
 
 PRE_SUBMIT_COLUMNS = ["check_name", "status", "value", "required_value", "message"]
 SHORT_READINESS_COLUMNS = PRE_SUBMIT_COLUMNS
+DATA_POLICY_RESOLVING_VALUES = {
+    "ACK",
+    "ACKNOWLEDGED",
+    "ALLOW",
+    "ALLOWED",
+    "REPAIRED",
+    "REPAIR_DONE",
+    "REMOVED",
+    "REMOVE_FROM_UNIVERSE",
+}
 
 
 def _bool_value(value):
@@ -30,6 +41,9 @@ def _row(check_name, status, value, required_value, message):
 
 def build_pre_submit_checks(summary):
     risk_pass_count = int(summary.get("risk_pass_count", 0) or 0)
+    submit_candidate_risk_pass_count = int(
+        summary.get("submit_candidate_risk_pass_count", risk_pass_count) or 0
+    )
     blocked_count = int(summary.get("blocked_count", 0) or 0)
     duplicate_count = int(summary.get("preview_duplicate_count", summary.get("duplicate_intent_count", 0)) or 0)
     pending_next_open_count = int(summary.get("pending_next_open_count", 0) or 0)
@@ -38,6 +52,12 @@ def build_pre_submit_checks(summary):
     submit_order_called = _bool_value(summary.get("submit_order_called", False))
     post_request_used = _bool_value(summary.get("post_request_used", False))
     short_trading_enabled = _bool_value(summary.get("short_trading_enabled", SHORT_TRADING_ENABLED))
+    alpaca_connection_ok = _bool_value(summary.get("alpaca_paper_connection_ok", False))
+    alpaca_positions_orders_ok = _bool_value(summary.get("alpaca_positions_orders_ok", False))
+    data_precheck_status = str(summary.get("data_precheck_status", "UNKNOWN")).strip().upper()
+    data_precheck_warning = str(summary.get("data_precheck_warning_summary", "none")).strip()
+    data_policy_unresolved_count = int(summary.get("data_policy_unresolved_count", 0) or 0)
+    data_policy_blocking_symbols = str(summary.get("data_policy_blocking_symbols", "none")).strip() or "none"
 
     rows = [
         _row(
@@ -83,11 +103,11 @@ def build_pre_submit_checks(summary):
             "Order intents must exist before submit readiness can be evaluated.",
         ),
         _row(
-            "risk_pass_count",
-            "PASS" if risk_pass_count > 0 else "BLOCK",
-            risk_pass_count,
+            "submit_candidate_risk_pass_count",
+            "PASS" if submit_candidate_risk_pass_count > 0 else "BLOCK",
+            submit_candidate_risk_pass_count,
             ">0",
-            "At least one intent must pass risk for a future submit candidate.",
+            "At least one intent must pass non-preview-duplicate risk for a future submit candidate.",
         ),
         _row("blocked_count", "WARNING" if blocked_count > 0 else "PASS", blocked_count, "0", "Blocked intents require review."),
         _row("duplicate_count", "WARNING" if duplicate_count > 0 else "PASS", duplicate_count, "0", "Preview duplicates do not block future submit namespace."),
@@ -114,17 +134,21 @@ def build_pre_submit_checks(summary):
         ),
         _row(
             "alpaca_paper_connection_ok",
-            "PASS" if _bool_value(summary.get("alpaca_paper_connection_ok", False)) else "WARNING",
-            _bool_value(summary.get("alpaca_paper_connection_ok", False)),
+            "PASS" if alpaca_connection_ok else "WARNING",
+            alpaca_connection_ok,
             True,
-            "Alpaca paper connection was not confirmed by this check.",
+            "Alpaca paper connection confirmed by latest report."
+            if alpaca_connection_ok
+            else "Alpaca paper connection was not confirmed by this check.",
         ),
         _row(
             "alpaca_positions_orders_ok",
-            "PASS" if _bool_value(summary.get("alpaca_positions_orders_ok", False)) else "WARNING",
-            _bool_value(summary.get("alpaca_positions_orders_ok", False)),
+            "PASS" if alpaca_positions_orders_ok else "WARNING",
+            alpaca_positions_orders_ok,
             True,
-            "Alpaca open positions/orders status was not confirmed by this check.",
+            "Alpaca open positions/orders check confirmed by latest report."
+            if alpaca_positions_orders_ok
+            else "Alpaca open positions/orders status was not confirmed by this check.",
         ),
         _row(
             "local_state_execution_preview_match",
@@ -132,6 +156,23 @@ def build_pre_submit_checks(summary):
             _bool_value(summary.get("local_state_execution_preview_match", False)),
             True,
             "Local paper state and execution preview counts must match.",
+        ),
+        _row(
+            "data_precheck_status",
+            "PASS" if data_precheck_status == "OK" else "BLOCK",
+            data_precheck_status,
+            "OK",
+            "Data precheck must be OK before submit readiness; warnings: "
+            + (data_precheck_warning or "none"),
+        ),
+        _row(
+            "data_policy_operator_review",
+            "PASS" if data_policy_unresolved_count == 0 else "BLOCK",
+            data_policy_unresolved_count,
+            "0",
+            "Data policy decisions require operator ACK/repair before readiness; symbols: "
+            + data_policy_blocking_symbols
+            + ". Resolving values require non-empty operator_note: ACK, ACKNOWLEDGED, ALLOW, ALLOWED, REPAIRED, REPAIR_DONE, REMOVED, REMOVE_FROM_UNIVERSE.",
         ),
         _row(
             "short_submit_allowed",
@@ -207,6 +248,83 @@ def _file_has_text(path, text):
     return text.lower() in Path(path).read_text(encoding="utf-8", errors="replace").lower()
 
 
+def _alpaca_report_connection_ok(path):
+    return _file_has_text(path, "connection_status: ok") or _file_has_text(path, "connection status: ok")
+
+
+def _alpaca_report_positions_orders_checked(path):
+    if not _alpaca_report_connection_ok(path):
+        return False
+    positions_checked = _file_has_text(path, "open_positions_count:") or _file_has_text(path, "open positions count:")
+    orders_checked = _file_has_text(path, "open_orders_count:") or _file_has_text(path, "open orders count:")
+    return positions_checked and orders_checked
+
+
+def _latest_data_precheck_status(latest_path):
+    manifest_path = Path(latest_path) / "run_manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            status = str(manifest.get("data_precheck_status", "")).strip().upper()
+            warning = str(manifest.get("warning_summary", "none")).strip()
+            if status:
+                return status, warning or "none"
+        except Exception:
+            pass
+    health_path = Path(latest_path) / "pipeline_health_log.csv"
+    if health_path.exists():
+        try:
+            health = pd.read_csv(health_path)
+            if not health.empty:
+                last = health.iloc[-1]
+                status = str(last.get("status", "")).strip().upper()
+                warning = str(last.get("warning_summary", "none")).strip()
+                return status or "UNKNOWN", warning or "none"
+        except Exception:
+            pass
+    return "UNKNOWN", "data_precheck_status_missing"
+
+
+def _latest_data_policy_review_summary(latest_path):
+    policy_path = Path(latest_path) / "data_policy_decisions.csv"
+    if not policy_path.exists():
+        return {
+            "data_policy_decision_count": 0,
+            "data_policy_unresolved_count": 0,
+            "data_policy_blocking_symbols": "none",
+        }
+    try:
+        policy = pd.read_csv(policy_path)
+    except Exception:
+        return {
+            "data_policy_decision_count": 0,
+            "data_policy_unresolved_count": 1,
+            "data_policy_blocking_symbols": "data_policy_decisions_read_error",
+        }
+    if policy.empty:
+        return {
+            "data_policy_decision_count": 0,
+            "data_policy_unresolved_count": 0,
+            "data_policy_blocking_symbols": "none",
+        }
+    operator_decision = policy.get("operator_decision", pd.Series("", index=policy.index)).fillna("").astype(str).str.upper().str.strip()
+    operator_note = policy.get("operator_note", pd.Series("", index=policy.index)).fillna("").astype(str).str.strip()
+    policy_status = policy.get("policy_status", pd.Series("", index=policy.index)).fillna("").astype(str).str.upper().str.strip()
+    blocking_policy = policy_status.str.startswith("BLOCK")
+    resolved = operator_decision.isin(DATA_POLICY_RESOLVING_VALUES) & operator_note.ne("")
+    unresolved = blocking_policy & ~resolved
+    symbols = sorted(
+        policy.loc[unresolved, "symbol"].fillna("").astype(str).str.upper().replace("", pd.NA).dropna().unique().tolist()
+        if "symbol" in policy
+        else []
+    )
+    return {
+        "data_policy_decision_count": int(len(policy)),
+        "data_policy_unresolved_count": int(unresolved.sum()),
+        "data_policy_blocking_symbols": ",".join(symbols) if symbols else "none",
+    }
+
+
 def build_summary_from_latest(latest_dir, preview_summary):
     latest_path = Path(latest_dir)
     summary = dict(preview_summary or {})
@@ -228,8 +346,12 @@ def build_summary_from_latest(latest_dir, preview_summary):
     summary["market_open_closed_info_available"] = (latest_path / "daily_preflight_report.md").exists()
     summary["next_open_data_available"] = _file_has_text(latest_path / "paper_signal_report.csv", "next_open_available")
     alpaca_report = latest_path / "alpaca_paper_check_report.md"
-    summary["alpaca_paper_connection_ok"] = _file_has_text(alpaca_report, "connection status: ok")
-    summary["alpaca_positions_orders_ok"] = alpaca_report.exists() and not _file_has_text(alpaca_report, "failed")
+    summary["alpaca_paper_connection_ok"] = _alpaca_report_connection_ok(alpaca_report)
+    summary["alpaca_positions_orders_ok"] = _alpaca_report_positions_orders_checked(alpaca_report)
+    data_precheck_status, data_precheck_warning = _latest_data_precheck_status(latest_path)
+    summary["data_precheck_status"] = data_precheck_status
+    summary["data_precheck_warning_summary"] = data_precheck_warning
+    summary.update(_latest_data_policy_review_summary(latest_path))
     return summary
 
 
