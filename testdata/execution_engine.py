@@ -522,6 +522,7 @@ def write_chatgpt_action_report(
     task_name=None,
     commands_run=None,
     files_changed=None,
+    submit_order_called=False,
 ):
     import datetime
     report_path = latest_path / "chatgpt_action_report.md"
@@ -547,7 +548,7 @@ def write_chatgpt_action_report(
     broker_submitted = "true" if submitted_count > 0 else "false"
     post_used = "true" if post_request_used else "false"
     submit_enabled_str = "true" if paper_submit_enabled else "false"
-    submit_order_called_str = "true" if submitted_count > 0 else "false"
+    submit_order_called_str = "true" if submit_order_called else "false"
     
     lines = [
         "# ChatGPT Action Report",
@@ -634,11 +635,7 @@ def run_alpaca_paper_submit(
     paper_endpoint_confirmed = "paper-api" in base_url
     live_endpoint_rejected = "api.alpaca.markets" in base_url and "paper-api" not in base_url
 
-    try:
-        from .alpaca_paper_broker import AlpacaPaperBroker
-    except ImportError:
-        from alpaca_paper_broker import AlpacaPaperBroker
-    broker = AlpacaPaperBroker(api_key=api_key, secret_key=secret_key, base_url=base_url)
+
 
     submit_results = []
 
@@ -741,8 +738,15 @@ def run_alpaca_paper_submit(
                     try:
                         submit_attempted = True
                         submit_order_called = True
-                        res = broker.submit_paper_order(intent, paper_submit_enabled=True, confirm_token=confirm_token)
                         post_request_used = True
+                        
+                        try:
+                            from .alpaca_paper_broker import AlpacaPaperBroker
+                        except ImportError:
+                            from alpaca_paper_broker import AlpacaPaperBroker
+                        
+                        broker = AlpacaPaperBroker(api_key=api_key, secret_key=secret_key, base_url=base_url)
+                        res = broker.submit_paper_order(intent, paper_submit_enabled=True, confirm_token=confirm_token)
                         submitted_count += 1
                         submit_results.append({
                             "symbol": symbol,
@@ -863,6 +867,7 @@ def run_alpaca_paper_submit(
             f"python universe_scanner.py --alpaca-paper-submit --max-submit-orders {max_submit_orders} --max-submit-notional {max_submit_notional} --make-chatgpt-report"
         ],
         files_changed=files_changed,
+        submit_order_called=submit_order_called,
     )
 
     print(f"Alpaca paper submit preview: {preview_path}")

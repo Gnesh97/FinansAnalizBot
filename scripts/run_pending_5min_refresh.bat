@@ -14,12 +14,10 @@ echo SUCCESS
 echo Refresh report: reports\latest\pending_5min_refresh_report.md
 echo 5min fill check: reports\latest\paper_5min_fill_check_report.md
 echo Master report: reports\latest\chatgpt_master_report.md
-pause
 exit /b 0
 
 :failed
 echo.
 echo FAILED with exit code %EXIT_CODE%
 echo Refresh report may be stale: reports\latest\pending_5min_refresh_report.md
-pause
 exit /b %EXIT_CODE%

@@ -369,14 +369,27 @@ def _write_alpaca_order_preview(latest_dir, output_path):
             decision = str(row.get("user_decision", "REVIEW_REQUIRED")).strip().upper()
             if decision == "REVIEW_REQUIRED":
                 decision = decisions.get(key, decision)
-            signal = signal_lookup.get(key)
-            fill_status = str(signal.get("fill_status", "")).strip().upper() if signal is not None else ""
+            
+            fill_status = str(row.get("fill_status", "")).strip().upper()
+            signal = None
+            if not fill_status:
+                signal = signal_lookup.get(key)
+                fill_status = str(signal.get("fill_status", "")).strip().upper() if signal is not None else ""
+                
             if decision != "ACCEPT" or fill_status != "PENDING_NEXT_OPEN":
                 continue
+                
             price = pd.to_numeric(
-                pd.Series([signal.get("entry_price_reference", pd.NA) if signal is not None else pd.NA]),
+                pd.Series([row.get("entry_price_reference", pd.NA)]),
                 errors="coerce",
             ).iloc[0]
+            if pd.isna(price):
+                if signal is None:
+                    signal = signal_lookup.get(key)
+                price = pd.to_numeric(
+                    pd.Series([signal.get("entry_price_reference", pd.NA) if signal is not None else pd.NA]),
+                    errors="coerce",
+                ).iloc[0]
             notional = pd.to_numeric(
                 pd.Series([row.get("paper_position_notional", pd.NA)]),
                 errors="coerce",
@@ -524,7 +537,7 @@ RAW_5MIN_UPDATE_AUDIT_COLUMNS = [
     "same_day_requested",
     "same_day_rows_received_count",
     "files_written_count",
-    "reason_if_no_2026_06_22_data",
+    "reason_if_no_target_date_data",
 ]
 
 
@@ -710,8 +723,8 @@ def _raw_5min_latest_date(path):
     return str(dates.max().date()) if not dates.empty else ""
 
 
-def _raw_5min_same_day_row_count(path, target_date="2026-06-22"):
-    if not Path(path).exists():
+def _raw_5min_same_day_row_count(path, target_date=None):
+    if not Path(path).exists() or target_date is None:
         return 0
     try:
         frame = pd.read_csv(path, usecols=["Date"])
@@ -942,7 +955,7 @@ def _write_pending_5min_master_section(latest_dir, summary):
 def _pending_5min_refresh_summary(report):
     if report is None or report.empty:
         return {
-            "status": "WARNING",
+            "status": "NO_PENDING",
             "pending_symbols_count": 0,
             "provider_requested_count": 0,
             "symbols_refreshed_count": 0,
@@ -993,9 +1006,13 @@ def _write_pending_5min_refresh_report(report, summary, csv_path, markdown_path)
         f"- latest_130min_date_max: {summary['latest_130min_date_max']}",
         f"- official_state_mutated: {str(summary['official_state_mutated']).lower()}",
         "",
-        _readable_table(report),
-        "",
     ]
+    if summary['pending_symbols_count'] == 0:
+        lines.append("No pending accepted next-open orders.")
+        lines.append("")
+    else:
+        lines.append(_readable_table(report))
+        lines.append("")
     markdown_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -1145,10 +1162,18 @@ def _write_raw_5min_update_audit_report(data_folder, latest_dir, pending_orders)
     for symbol in pending_symbols:
         raw_path = data_path / "raw_5min" / f"{symbol}_5min.csv"
         latest_date = _raw_5min_latest_date(raw_path)
-        same_day_rows = _raw_5min_same_day_row_count(raw_path)
+        
+        symbol_orders = pending_orders[pending_orders.get("symbol", pd.Series(dtype=str)).astype(str).str.upper().eq(symbol)]
+        target_date_str = None
+        if not symbol_orders.empty:
+            target_date_val = _paper_fill_target_date(symbol_orders.iloc[0])
+            if target_date_val is not None:
+                target_date_str = str(target_date_val)
+        
+        same_day_rows = _raw_5min_same_day_row_count(raw_path, target_date=target_date_str)
         same_day_rows_received_count += same_day_rows
         reason = ""
-        if latest_date == "2026-06-22":
+        if target_date_str and latest_date == target_date_str:
             reason = ""
         elif not raw_path.exists():
             reason = "missing_raw_5min_file"
@@ -1192,7 +1217,7 @@ def _write_raw_5min_update_audit_report(data_folder, latest_dir, pending_orders)
                 "same_day_requested": same_day_requested,
                 "same_day_rows_received_count": same_day_rows,
                 "files_written_count": files_written_count,
-                "reason_if_no_2026_06_22_data": reason,
+                "reason_if_no_target_date_data": reason,
             }
         )
     audit = ensure_columns(pd.DataFrame(rows), RAW_5MIN_UPDATE_AUDIT_COLUMNS, fill_value="")
@@ -1207,7 +1232,7 @@ def _write_raw_5min_update_audit_report(data_folder, latest_dir, pending_orders)
         "same_day_requested": same_day_requested,
         "same_day_rows_received_count": same_day_rows_received_count,
         "files_written_count": files_written_count,
-        "reason_if_no_2026_06_22_data": "; ".join(sorted(set(audit["reason_if_no_2026_06_22_data"].dropna().astype(str)))) if not audit.empty else "no_pending_symbols",
+        "reason_if_no_target_date_data": "; ".join(sorted(set(audit["reason_if_no_target_date_data"].dropna().astype(str)))) if not audit.empty else "no_pending_symbols",
     }
     lines = [
         "# Raw 5min Update Audit Report",
@@ -1219,7 +1244,7 @@ def _write_raw_5min_update_audit_report(data_folder, latest_dir, pending_orders)
         f"- same_day_requested: {str(summary['same_day_requested']).lower()}",
         f"- same_day_rows_received_count: {summary['same_day_rows_received_count']}",
         f"- files_written_count: {summary['files_written_count']}",
-        f"- reason_if_no_2026_06_22_data: {summary['reason_if_no_2026_06_22_data']}",
+        f"- reason_if_no_target_date_data: {summary['reason_if_no_target_date_data']}",
         "",
         _readable_table(audit),
         "",
