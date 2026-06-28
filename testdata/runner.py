@@ -55,6 +55,7 @@ try:
         get_last_newly_added_count,
         get_stable_key,
     )
+    from .paper_portfolio_monitor import write_paper_portfolio_monitor
     from .execution_engine import run_execution_preview
     from .strategies.base import generate_strategy_signals
     from .strategies.cross_sectional_momentum import (
@@ -125,6 +126,7 @@ except ImportError:
         get_last_newly_added_count,
         get_stable_key,
     )
+    from paper_portfolio_monitor import write_paper_portfolio_monitor
     from execution_engine import run_execution_preview
     from strategies.base import generate_strategy_signals
     from strategies.cross_sectional_momentum import (
@@ -7358,6 +7360,19 @@ def run_strategy_experiments(
             latest_dir / "paper_pending_orders.csv",
             latest_daily_for_pending,
         )
+        write_paper_portfolio_monitor(
+            latest_dir,
+            latest_dir / "paper_portfolio_monitor.csv",
+            latest_dir / "paper_portfolio_monitor.md",
+            asset_data=asset_data,
+            safety_flags={
+                "broker_submit_enabled": False,
+                "live_trading_enabled": False,
+                "short_trading_enabled": False,
+                "submit_order_called": False,
+                "post_request_used": False,
+            },
+        )
         daily_pipeline_status = _daily_preflight_status(
             paper_signal_report,
             latest_dir / "paper_trade_log.csv",
@@ -7387,6 +7402,19 @@ def run_strategy_experiments(
                     paper_signal_report,
                     directory / "paper_pending_orders.csv",
                     latest_daily_for_pending,
+                )
+                write_paper_portfolio_monitor(
+                    directory,
+                    directory / "paper_portfolio_monitor.csv",
+                    directory / "paper_portfolio_monitor.md",
+                    asset_data=asset_data,
+                    safety_flags={
+                        "broker_submit_enabled": False,
+                        "live_trading_enabled": False,
+                        "short_trading_enabled": False,
+                        "submit_order_called": False,
+                        "post_request_used": False,
+                    },
                 )
                 _write_daily_preflight_report(
                     daily_pipeline_status,

@@ -14,6 +14,7 @@ LATEST_DIR = ROOT / "testdata" / "reports" / "latest"
 COMPILE_TARGETS = [
     "testdata/report_schemas.py",
     "testdata/paper_state_manager.py",
+    "testdata/paper_portfolio_monitor.py",
     "testdata/runner.py",
     "testdata/execution_engine.py",
     "testdata/pre_submit_gate.py",
