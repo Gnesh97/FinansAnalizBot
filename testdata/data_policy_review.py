@@ -72,6 +72,13 @@ def _zero_volume_rows(frame):
     return int(volume.fillna(0).eq(0).sum())
 
 
+def _latest_date_value(values):
+    parsed = pd.to_datetime(pd.Series(list(values)), errors="coerce").dropna()
+    if parsed.empty:
+        return pd.NaT
+    return parsed.max()
+
+
 def _local_next_action(policy_row, evidence):
     warning = str(policy_row.get("warning", "")).strip()
     symbol = str(policy_row.get("symbol", "")).strip().upper()
@@ -247,13 +254,18 @@ def main():
 
     active_syms = _active_symbols(latest_dir)
     
-    # Check PSA repair status
+    # Check PSA repair status against current local daily data end date.
     psa_repaired = False
+    latest_daily_date = _latest_date_value(evidence.get("daily_last_date", pd.Series(dtype=str))) if not evidence.empty else pd.NaT
     psa_daily_file = Path("hisseler/daily/PSA_1D.csv")
     if psa_daily_file.exists():
         try:
             df_psa = pd.read_csv(psa_daily_file)
-            if not df_psa.empty and "2026-06-22" in str(df_psa["Date"].iloc[-1]):
+            psa_latest = pd.to_datetime(
+                pd.Series([df_psa["Date"].iloc[-1] if not df_psa.empty else pd.NA]),
+                errors="coerce",
+            ).iloc[0]
+            if pd.notna(psa_latest) and pd.notna(latest_daily_date) and psa_latest.date() >= latest_daily_date.date():
                 psa_repaired = True
         except Exception:
             pass

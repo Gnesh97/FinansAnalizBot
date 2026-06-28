@@ -10,16 +10,26 @@ def check_latest_date(filepath):
         df = pd.read_csv(filepath)
         if df.empty or "Date" not in df:
             return "none"
-        last_val = str(df["Date"].iloc[-1])
-        if "2026-06-22" in last_val:
-            return "2026-06-22"
-        return last_val.split()[0]
+        return str(df["Date"].iloc[-1]).split()[0]
     except Exception:
         return "error"
+
+
+def latest_daily_date(daily_dir):
+    dates = []
+    for path in Path(daily_dir).glob("*_1D.csv"):
+        value = check_latest_date(path)
+        parsed = pd.to_datetime(pd.Series([value]), errors="coerce").iloc[0]
+        if pd.notna(parsed):
+            dates.append(parsed)
+    if not dates:
+        return "none"
+    return max(dates).date().isoformat()
 
 def main():
     print("Starting targeted data repair for PSA...")
     daily_file = Path("hisseler/daily/PSA_1D.csv")
+    target_latest_date = latest_daily_date(daily_file.parent)
     original_date = check_latest_date(daily_file)
     
     # Run vericekici for PSA
@@ -32,7 +42,9 @@ def main():
         repair_status = "FAILED"
         
     new_date = check_latest_date(daily_file)
-    outcome = "OK" if "2026-06-22" in new_date else "WARNING"
+    new_date_ts = pd.to_datetime(pd.Series([new_date]), errors="coerce").iloc[0]
+    target_date_ts = pd.to_datetime(pd.Series([target_latest_date]), errors="coerce").iloc[0]
+    outcome = "OK" if pd.notna(new_date_ts) and pd.notna(target_date_ts) and new_date_ts.date() >= target_date_ts.date() else "WARNING"
     
     # Create repair reports
     reports_dir = Path("reports/latest")
@@ -45,7 +57,7 @@ def main():
     repair_records = [{
         "symbol": "PSA",
         "repair_status": repair_status,
-        "date_repaired": "2026-06-23",
+        "date_repaired": pd.Timestamp.now().strftime("%Y-%m-%d"),
         "original_latest_date": original_date,
         "new_latest_date": new_date,
         "outcome_status": outcome,
@@ -63,7 +75,7 @@ def main():
 | **PSA** | {repair_status} | {original_date} | {new_date} | {outcome} | Targeted refresh run completed |
 
 ## Analysis
-- **Success Criteria**: PSA has been checked for latest session data (2026-06-22).
+- **Success Criteria**: PSA has been checked against latest local daily session data ({target_latest_date}).
 - **Current Daily Date**: {new_date}
 - **Zero-Volume Check**: PSA still contains 1 historical zero-volume row (2024-12-23), which is a vendor historical artifact. Since PSA is not in active trading positions or reviews, this is classified as a non-blocking warning.
 """

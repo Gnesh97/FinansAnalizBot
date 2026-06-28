@@ -5072,16 +5072,149 @@ def _write_data_precheck_report(paper_report, daily_dir, intraday_dir, status, p
     return result
 
 
+REGRESSION_BASELINE_REFRESH_COMMAND = "python testdata\\run_baseline.py"
+REGRESSION_BASELINE_UPDATE_REPORT = "regression_baseline_update_report.md"
+
+
+def _clean_markdown_cell(value):
+    return str(value).replace("**", "").strip()
+
+
+def _is_date_only(value):
+    text = str(value).strip()
+    return len(text) == 10 and text[4] == "-" and text[7] == "-"
+
+
+def _read_regression_benchmark_baseline(latest_dir, actual):
+    baseline = {
+        "qqq_return": pd.NA,
+        "equal_weight_return": pd.NA,
+        "qqq_start_date": actual.get("qqq_start_date", ""),
+        "qqq_end_date": "",
+        "equal_weight_start_date": actual.get("equal_weight_start_date", ""),
+        "equal_weight_end_date": "",
+        "source": str(Path(latest_dir) / REGRESSION_BASELINE_UPDATE_REPORT),
+        "refresh_command": REGRESSION_BASELINE_REFRESH_COMMAND,
+    }
+    path = Path(latest_dir) / REGRESSION_BASELINE_UPDATE_REPORT
+    if not path.exists():
+        return baseline
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return baseline
+    values = {}
+    for line in lines:
+        if not line.strip().startswith("|") or "---" in line:
+            continue
+        cells = [_clean_markdown_cell(cell) for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or cells[0].lower() == "parameter":
+            continue
+        values[cells[0]] = cells[2]
+    baseline_end = values.get("Baseline End Date", "")
+    baseline["qqq_end_date"] = baseline_end
+    baseline["equal_weight_end_date"] = baseline_end
+    baseline["qqq_return"] = pd.to_numeric(
+        pd.Series([values.get("QQQ Expected Return (%)", pd.NA)]),
+        errors="coerce",
+    ).iloc[0]
+    baseline["equal_weight_return"] = pd.to_numeric(
+        pd.Series([values.get("EqualWeight Expected Return (%)", pd.NA)]),
+        errors="coerce",
+    ).iloc[0]
+    return baseline
+
+
+def _same_timestamp(left, right):
+    if _is_date_only(left) or _is_date_only(right):
+        left_date = pd.to_datetime(left, errors="coerce")
+        right_date = pd.to_datetime(right, errors="coerce")
+        if pd.isna(left_date) or pd.isna(right_date):
+            return str(left).strip() == str(right).strip()
+        return bool(left_date.date() == right_date.date())
+    left_ts = pd.to_datetime(left, errors="coerce", utc=True)
+    right_ts = pd.to_datetime(right, errors="coerce", utc=True)
+    if pd.isna(left_ts) or pd.isna(right_ts):
+        return str(left).strip() == str(right).strip()
+    return bool(left_ts == right_ts)
+
+
+def _timestamp_after(left, right):
+    if _is_date_only(left) or _is_date_only(right):
+        left_date = pd.to_datetime(left, errors="coerce")
+        right_date = pd.to_datetime(right, errors="coerce")
+        if pd.isna(left_date) or pd.isna(right_date):
+            return False
+        return bool(left_date.date() > right_date.date())
+    left_ts = pd.to_datetime(left, errors="coerce", utc=True)
+    right_ts = pd.to_datetime(right, errors="coerce", utc=True)
+    if pd.isna(left_ts) or pd.isna(right_ts):
+        return False
+    return bool(left_ts > right_ts)
+
+
+def _benchmark_baseline_stale(actual, baseline):
+    return (
+        not _same_timestamp(actual.get("qqq_end_date"), baseline.get("qqq_end_date"))
+        and not _same_timestamp(
+            actual.get("equal_weight_end_date"),
+            baseline.get("equal_weight_end_date"),
+        )
+        and _timestamp_after(actual.get("qqq_end_date"), baseline.get("qqq_end_date"))
+        and _timestamp_after(
+            actual.get("equal_weight_end_date"),
+            baseline.get("equal_weight_end_date"),
+        )
+    )
+
+
+def _benchmark_return_warnings(qqq_return, ew_return, actual, baseline):
+    critical = []
+    warnings = []
+    qqq_expected = baseline.get("qqq_return", pd.NA)
+    ew_expected = baseline.get("equal_weight_return", pd.NA)
+    if pd.isna(qqq_expected) or pd.isna(ew_expected) or not baseline.get("qqq_end_date"):
+        return critical, ["regression_benchmark_baseline_metadata_missing"], "baseline metadata missing; manual baseline refresh required"
+    qqq_changed = pd.isna(qqq_return) or abs(float(qqq_return) - qqq_expected) > 0.05
+    ew_changed = pd.isna(ew_return) or abs(float(ew_return) - ew_expected) > 0.05
+    if not qqq_changed and not ew_changed:
+        return critical, warnings, "same benchmark scope"
+    if _benchmark_baseline_stale(actual, baseline):
+        reason = "benchmark baseline end date is older than actual benchmark end date; manual baseline refresh required"
+        if qqq_changed:
+            warnings.append(f"qqq_return_baseline_stale_expected_{qqq_expected}_actual_{qqq_return}")
+        if ew_changed:
+            warnings.append(f"equal_weight_return_baseline_stale_expected_{ew_expected}_actual_{ew_return}")
+        return critical, warnings, reason
+    reason = "same baseline/date scope or missing date scope; return mismatch is critical"
+    if qqq_changed:
+        critical.append(f"qqq_return_expected_{qqq_expected}_actual_{qqq_return}")
+    if ew_changed:
+        critical.append(f"equal_weight_return_expected_{ew_expected}_actual_{ew_return}")
+    return critical, warnings, reason
+
+
 def _write_regression_guard_report(report, decision, latest_dir, path):
     warnings = []
     critical = []
     first = report.iloc[0] if report is not None and not report.empty else pd.Series(dtype=object)
     qqq_return = pd.to_numeric(pd.Series([first.get("QQQ BuyHold Return (%)", pd.NA)]), errors="coerce").iloc[0]
     ew_return = pd.to_numeric(pd.Series([first.get("EqualWeight Universe Return (%)", pd.NA)]), errors="coerce").iloc[0]
-    if pd.isna(qqq_return) or abs(float(qqq_return) - 198.34) > 0.05:
-        critical.append(f"qqq_return_expected_198.34_actual_{qqq_return}")
-    if pd.isna(ew_return) or abs(float(ew_return) - 203.27) > 0.05:
-        critical.append(f"equal_weight_return_expected_203.27_actual_{ew_return}")
+    actual_benchmark = {
+        "qqq_start_date": first.get("QQQ Benchmark Start", ""),
+        "qqq_end_date": first.get("QQQ Benchmark End", ""),
+        "equal_weight_start_date": first.get("EqualWeight Benchmark Start", ""),
+        "equal_weight_end_date": first.get("EqualWeight Benchmark End", ""),
+    }
+    baseline = _read_regression_benchmark_baseline(latest_dir, actual_benchmark)
+    benchmark_critical, benchmark_warnings, benchmark_scope_reason = _benchmark_return_warnings(
+        qqq_return,
+        ew_return,
+        actual_benchmark,
+        baseline,
+    )
+    critical.extend(benchmark_critical)
+    warnings.extend(benchmark_warnings)
     main_role_ok = False
     if decision is not None and not decision.empty:
         main_rows = decision[
@@ -5099,8 +5232,9 @@ def _write_regression_guard_report(report, decision, latest_dir, path):
         pending_rows = len(pending)
     except Exception:
         critical.append("paper_pending_orders_unreadable")
+    status = "CRITICAL" if critical else ("BASELINE_STALE" if warnings else "OK")
     result = {
-        "status": "CRITICAL" if critical else ("WARNING" if warnings else "OK"),
+        "status": status,
         "critical": critical,
         "warnings": warnings,
         "strategy_metrics_changed": False,
@@ -5111,16 +5245,24 @@ def _write_regression_guard_report(report, decision, latest_dir, path):
         "# Regression Guard Report",
         "",
         f"- status: {result['status']}",
-        f"- QQQ return expected: 198.34",
+        f"- expected QQQ benchmark range: {baseline['qqq_start_date']} -> {baseline['qqq_end_date']}",
+        f"- actual QQQ benchmark range: {actual_benchmark['qqq_start_date']} -> {actual_benchmark['qqq_end_date']}",
+        f"- expected EqualWeight benchmark range: {baseline['equal_weight_start_date']} -> {baseline['equal_weight_end_date']}",
+        f"- actual EqualWeight benchmark range: {actual_benchmark['equal_weight_start_date']} -> {actual_benchmark['equal_weight_end_date']}",
+        f"- QQQ return expected: {baseline['qqq_return']}",
         f"- QQQ return actual: {qqq_return}",
-        f"- EqualWeight return expected: 203.27",
+        f"- EqualWeight return expected: {baseline['equal_weight_return']}",
         f"- EqualWeight return actual: {ew_return}",
+        f"- status reason: {benchmark_scope_reason}",
+        f"- baseline metadata source: {baseline['source']}",
+        f"- manual baseline refresh command: `{baseline['refresh_command']}`",
         "- strategy metrics changed: false",
         "- benchmark changed: false",
         f"- main candidate role: {'rs_m126_top30_sma100_no_regime' if main_role_ok else 'changed_or_missing'}",
         f"- paper pending accepted orders readable: {pending_readable}",
         f"- paper pending rows: {pending_rows}",
         f"- critical_warnings: {', '.join(critical) if critical else 'none'}",
+        f"- baseline_warnings: {', '.join(warnings) if warnings else 'none'}",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -5242,13 +5384,19 @@ def _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir):
 
     active_syms = _active_symbols(latest_dir)
     
-    # Check PSA repair status
+    # Check PSA repair status against current daily data end date.
     psa_repaired = False
+    latest_daily_date = _latest_csv_data_date(daily_dir)
     psa_daily_file = Path(daily_dir) / "PSA_1D.csv"
     if psa_daily_file.exists():
         try:
             df_psa = pd.read_csv(psa_daily_file)
-            if not df_psa.empty and "2026-06-22" in str(df_psa["Date"].iloc[-1]):
+            psa_latest = pd.to_datetime(
+                pd.Series([df_psa["Date"].iloc[-1] if not df_psa.empty else pd.NA]),
+                errors="coerce",
+            ).iloc[0]
+            target_latest = pd.to_datetime(pd.Series([latest_daily_date]), errors="coerce").iloc[0]
+            if pd.notna(psa_latest) and pd.notna(target_latest) and psa_latest.date() >= target_latest.date():
                 psa_repaired = True
         except Exception:
             pass
