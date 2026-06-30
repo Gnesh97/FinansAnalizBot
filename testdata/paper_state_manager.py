@@ -128,6 +128,29 @@ def get_stable_key(row):
     return (strategy_name, symbol, action, signal_date)
 
 
+def net_open_positions_from_trade_log(trade_log):
+    frame = trade_log.copy() if trade_log is not None else pd.DataFrame()
+    if frame.empty:
+        return pd.DataFrame(columns=["strategy_name", "symbol", "net_shares"])
+    filled = frame[
+        frame.get("fill_status", pd.Series("", index=frame.index)).astype(str).str.upper().eq("PAPER_FILLED")
+    ].copy()
+    if filled.empty:
+        return pd.DataFrame(columns=["strategy_name", "symbol", "net_shares"])
+    filled["strategy_name"] = filled.get("strategy_name", pd.Series("", index=filled.index)).astype(str)
+    filled["symbol"] = filled.get("symbol", pd.Series("", index=filled.index)).astype(str).str.upper()
+    action = filled.get("action", pd.Series("", index=filled.index)).astype(str).str.upper()
+    shares = pd.to_numeric(filled.get("shares", pd.Series(0.0, index=filled.index)), errors="coerce").fillna(0.0)
+    filled["signed_shares"] = shares.where(action.eq("BUY"), -shares.where(action.eq("SELL"), 0.0))
+    net = (
+        filled.groupby(["strategy_name", "symbol"], dropna=False)["signed_shares"]
+        .sum()
+        .reset_index()
+        .rename(columns={"signed_shares": "net_shares"})
+    )
+    return net[net["net_shares"] > 0].reset_index(drop=True)
+
+
 def append_trade_log(reports_dir, rows):
     global LAST_SKIPPED_DUPLICATE_FILL_COUNT, LAST_NEWLY_ADDED_COUNT
     current = read_trade_log(reports_dir)
@@ -149,8 +172,18 @@ def append_trade_log(reports_dir, rows):
                 existing_keys.add(key)
                 
         if newly_added_rows:
-            new_df = pd.DataFrame(newly_added_rows)
-            current = new_df if current.empty else pd.concat([current, new_df], ignore_index=True)
+            new_df = ensure_columns(pd.DataFrame(newly_added_rows), PAPER_TRADE_LOG_COLUMNS, fill_value=pd.NA)
+            current = ensure_columns(current, PAPER_TRADE_LOG_COLUMNS, fill_value=pd.NA)
+            if current.empty:
+                current = new_df
+            else:
+                compact_current = current.dropna(axis=1, how="all")
+                compact_new = new_df.dropna(axis=1, how="all")
+                current = ensure_columns(
+                    pd.concat([compact_current, compact_new], ignore_index=True),
+                    PAPER_TRADE_LOG_COLUMNS,
+                    fill_value=pd.NA,
+                )
             write_trade_log(reports_dir, current)
             
     LAST_SKIPPED_DUPLICATE_FILL_COUNT += skipped

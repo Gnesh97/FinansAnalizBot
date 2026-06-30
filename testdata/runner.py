@@ -54,6 +54,7 @@ try:
         get_last_skipped_duplicate_fill_count,
         get_last_newly_added_count,
         get_stable_key,
+        net_open_positions_from_trade_log,
     )
     from .paper_portfolio_monitor import write_paper_portfolio_monitor
     from .execution_engine import run_execution_preview
@@ -125,6 +126,7 @@ except ImportError:
         get_last_skipped_duplicate_fill_count,
         get_last_newly_added_count,
         get_stable_key,
+        net_open_positions_from_trade_log,
     )
     from paper_portfolio_monitor import write_paper_portfolio_monitor
     from execution_engine import run_execution_preview
@@ -4624,11 +4626,7 @@ def _daily_preflight_status(paper_report, trade_log_path, daily_dir, intraday_di
                 unique_filled_trades = len(set(keys))
                 if duplicates_found:
                     ledger_status = "WARNING"
-                filled_buys = trade_log[
-                    trade_log.get("fill_status", pd.Series(dtype=str)).astype(str).str.upper().eq("PAPER_FILLED") &
-                    trade_log.get("action", pd.Series(dtype=str)).astype(str).str.upper().eq("BUY")
-                ]
-                open_positions = len(filled_buys["symbol"].dropna().unique())
+                open_positions = len(net_open_positions_from_trade_log(trade_log))
         except Exception:
             log_rows = 0
             log_filled_rows = 0
@@ -4724,11 +4722,8 @@ def _write_paper_ledger_audit_report(latest_dir, db_path, daily_pipeline_status)
                 duplicate_filled_trade_count = len(trade_log) - len(unique_keys)
                 duplicate_keys_list = [f"{d[0]}:{d[1]}:{d[2]}:{d[3]}" for d in dups]
                 
-                filled_buys = trade_log[
-                    trade_log.get("fill_status", pd.Series(dtype=str)).astype(str).str.upper().eq("PAPER_FILLED") &
-                    trade_log.get("action", pd.Series(dtype=str)).astype(str).str.upper().eq("BUY")
-                ]
-                current_open_symbols_list = sorted(filled_buys["symbol"].dropna().unique().tolist())
+                open_positions = net_open_positions_from_trade_log(trade_log)
+                current_open_symbols_list = sorted(open_positions["symbol"].dropna().unique().tolist())
                 current_open_position_count = len(current_open_symbols_list)
         except Exception:
             pass
@@ -5706,6 +5701,10 @@ def _write_report_schema_validation_report(latest_dir, path):
 
 def _write_paper_state_validation_report(reports_dir, path):
     validation = validate_paper_state(reports_dir)
+    try:
+        validation["open_paper_positions"] = len(net_open_positions_from_trade_log(read_trade_log(reports_dir)))
+    except Exception:
+        validation["open_paper_positions"] = "not_available"
     lines = [
         "# Paper State Validation Report",
         "",
@@ -5715,6 +5714,7 @@ def _write_paper_state_validation_report(reports_dir, path):
         f"- pending_orders_rows: {validation['pending_orders_rows']}",
         f"- order_review_rows: {validation['order_review_rows']}",
         f"- trade_log_rows: {validation['trade_log_rows']}",
+        f"- open_paper_positions: {validation['open_paper_positions']}",
         f"- schema_status: {validation['schema_status']}",
         f"- status: {validation['status']}",
         "",
@@ -6265,7 +6265,20 @@ def _chatgpt_performance_section(profile_rows):
 
 def _write_sqlite_state_report(latest_dir, db_path):
     try:
+        import sqlite3
         summary = get_state_summary(str(db_path))
+        summary["paper_open_positions_count"] = "not_available"
+        if Path(db_path).exists():
+            conn = None
+            try:
+                conn = sqlite3.connect(str(db_path))
+                trades = pd.read_sql_query("SELECT * FROM paper_trades", conn)
+                summary["paper_open_positions_count"] = len(net_open_positions_from_trade_log(trades))
+            except Exception:
+                summary["paper_open_positions_count"] = "not_available"
+            finally:
+                if conn:
+                    conn.close()
         
         # Write CSV
         csv_path = latest_dir / "sqlite_state_report.csv"
@@ -6286,6 +6299,7 @@ def _write_sqlite_state_report(latest_dir, db_path):
             f"- pipeline_runs_count: {summary.get('pipeline_runs_count')}",
             f"- paper_orders_count: {summary.get('paper_orders_count')}",
             f"- paper_trades_count: {summary.get('paper_trades_count')}",
+            f"- paper_open_positions_count: {summary.get('paper_open_positions_count')}",
             f"- order_intents_count: {summary.get('order_intents_count')}",
             f"- execution_audit_count: {summary.get('execution_audit_count')}",
             f"- readiness_checks_count: {summary.get('readiness_checks_count')}",
