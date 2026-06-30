@@ -3,13 +3,13 @@ try:
     import sys
     from pathlib import Path
 
-    from .runner import run_alpaca_paper_check, run_execution_preview_check, run_paper_5min_fill_check, run_pending_5min_refresh, run_strategy_experiments, run_universe_scanner
+    from .runner import run_alpaca_paper_check, run_execution_preview_check, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_pending_5min_refresh, run_strategy_experiments, run_universe_scanner
 except ImportError:
     import argparse
     import sys
     from pathlib import Path
 
-    from runner import run_alpaca_paper_check, run_execution_preview_check, run_paper_5min_fill_check, run_pending_5min_refresh, run_strategy_experiments, run_universe_scanner
+    from runner import run_alpaca_paper_check, run_execution_preview_check, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_pending_5min_refresh, run_strategy_experiments, run_universe_scanner
 
 
 VALIDATION_EXPERIMENTS = [
@@ -248,6 +248,16 @@ if __name__ == "__main__":
         action="store_true",
         help="Refresh raw_5min and rebuild 130min only for accepted pending paper symbols; never mutates paper state.",
     )
+    parser.add_argument(
+        "--paper-ops-dashboard",
+        action="store_true",
+        help="Write report-only local paper operations dashboard from existing latest reports; no data refresh or state mutation.",
+    )
+    parser.add_argument(
+        "--paper-decision-inbox",
+        action="store_true",
+        help="Write report-only local paper decision inbox from existing latest reports; no state mutation.",
+    )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)
     data_folder = Path(__file__).resolve().parent / "hisseler"
@@ -276,6 +286,12 @@ if __name__ == "__main__":
             str(data_folder),
             make_chatgpt_report=args.make_chatgpt_report,
         )
+        raise SystemExit(0)
+    if args.paper_ops_dashboard:
+        run_paper_ops_dashboard(str(data_folder))
+        raise SystemExit(0)
+    if args.paper_decision_inbox:
+        run_paper_decision_inbox(str(data_folder))
         raise SystemExit(0)
     run_strategy_experiments(
         str(data_folder),

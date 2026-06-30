@@ -57,6 +57,8 @@ try:
         net_open_positions_from_trade_log,
     )
     from .paper_portfolio_monitor import write_paper_portfolio_monitor
+    from .paper_ops_dashboard import write_paper_ops_dashboard
+    from .paper_decision_inbox import write_paper_decision_inbox
     from .execution_engine import run_execution_preview
     from .strategies.base import generate_strategy_signals
     from .strategies.cross_sectional_momentum import (
@@ -129,6 +131,8 @@ except ImportError:
         net_open_positions_from_trade_log,
     )
     from paper_portfolio_monitor import write_paper_portfolio_monitor
+    from paper_ops_dashboard import write_paper_ops_dashboard
+    from paper_decision_inbox import write_paper_decision_inbox
     from execution_engine import run_execution_preview
     from strategies.base import generate_strategy_signals
     from strategies.cross_sectional_momentum import (
@@ -6739,6 +6743,24 @@ def run_execution_preview_check(data_folder="hisseler", report_output_dir="repor
         print(f"WARNING: SQLite mirror execution failed: {e_sql}")
 
     return summary
+
+
+def run_paper_ops_dashboard(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    dashboard = write_paper_ops_dashboard(latest_dir)
+    print(f"Paper ops dashboard: {latest_dir / 'paper_ops_dashboard.md'}")
+    print(f"Paper ops dashboard json: {latest_dir / 'paper_ops_dashboard.json'}")
+    print(f"next_action: {dashboard.get('next_action', '')}")
+    return dashboard
+
+
+def run_paper_decision_inbox(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    result = write_paper_decision_inbox(latest_dir)
+    print(f"Paper decision inbox: {latest_dir / 'paper_decision_inbox.md'}")
+    print(f"Paper decision inbox csv: {latest_dir / 'paper_decision_inbox.csv'}")
+    print(f"total_decision_candidates: {result.get('summary', {}).get('total_decision_candidates', 0)}")
+    return result
 
 
 def _run_liquidity_guard_sensitivity_report(
