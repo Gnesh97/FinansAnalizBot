@@ -5405,11 +5405,23 @@ def _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir):
     safe_exception_count = 0
     redownload_required_count = 0
     manual_review_count = 0
+    resolving_values = {
+        "ACK",
+        "ACKNOWLEDGED",
+        "ALLOW",
+        "ALLOWED",
+        "REPAIRED",
+        "REPAIR_DONE",
+        "REMOVED",
+        "REMOVE_FROM_UNIVERSE",
+    }
 
     for item in policy_decisions:
         symbol = str(item.get("symbol", "")).strip().upper()
         warning = str(item.get("warning", "")).strip()
         status_str = str(item.get("policy_status", "")).upper()
+        operator_decision = str(item.get("operator_decision", "")).strip().upper()
+        operator_note = str(item.get("operator_note", "")).strip()
         
         # Determine categories
         if symbol in {"BK", "PARA"}:
@@ -5420,7 +5432,8 @@ def _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir):
             if status_str.startswith("BLOCK"):
                 manual_review_count += 1
 
-        is_blocking = status_str.startswith("BLOCK")
+        is_resolved = operator_decision in resolving_values and bool(operator_note)
+        is_blocking = status_str.startswith("BLOCK") and not is_resolved
         if is_blocking:
             # Check exceptions
             exception = DATA_POLICY_EXCEPTIONS.get(symbol, {})

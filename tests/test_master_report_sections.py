@@ -154,6 +154,37 @@ class MasterReportSectionsTest(unittest.TestCase):
         self.assertIn("- data_policy_review_report_path: reports/latest/data_policy_review_report.md", text)
         self.assertIn("- data_policy_review_evidence_path: reports/latest/data_policy_review_evidence.csv", text)
 
+    def test_operational_health_respects_acknowledged_data_policy_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "paper_pending_orders.csv").write_text("symbol\nPSA\n", encoding="utf-8")
+            section = _chatgpt_operational_health_section(
+                {
+                    "data_precheck": {
+                        "status": "WARNING",
+                        "warnings": ["psa_zero_volume"],
+                        "critical": [],
+                        "policy_decisions": [
+                            {
+                                "symbol": "PSA",
+                                "policy_status": "BLOCK_UNTIL_POLICY_ACK",
+                                "operator_decision": "ACK",
+                                "operator_note": "fixture acknowledgement",
+                            },
+                        ],
+                    },
+                    "pipeline_health": {
+                        "status": "WARNING",
+                        "latest_dir": str(tmp_path),
+                    },
+                }
+            )
+        text = "\n".join(section)
+        self.assertIn("- data_policy_status: WARNING", text)
+        self.assertIn("- data_policy_blocking_count: 0", text)
+        self.assertIn("- data_policy_blocking_symbols: none", text)
+        self.assertIn("- active_blocking_symbols: none", text)
+
     def test_operational_health_marks_missing_data_policy_not_generated(self):
         text = "\n".join(_chatgpt_operational_health_section({"pipeline_health": {"status": "OK"}}))
         self.assertIn("- data_policy_status: not_generated", text)
