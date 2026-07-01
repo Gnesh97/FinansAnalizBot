@@ -415,11 +415,12 @@ def _download_symbol_worker(payload: dict) -> dict:
             result["raw_5min_status"] = status
             result["raw_provider_rows"] = provider_rows
             result["new_rows_added"] += added
+            target_session = pd.Timestamp(intraday_end).date().isoformat()
             
             # Calculate current session stats
             if not raw_5min.empty:
                 dates_str = raw_5min["Date"].astype(str)
-                result["current_session_received"] = int(dates_str.str.contains("2026-06-23").sum())
+                result["current_session_received"] = int(dates_str.str.contains(target_session).sum())
             else:
                 result["current_session_received"] = 0
                 
@@ -427,7 +428,7 @@ def _download_symbol_worker(payload: dict) -> dict:
             final_saved = read_existing_bars(raw_path)
             if not final_saved.empty:
                 dates_str = final_saved["Date"].astype(str)
-                result["current_session_added"] = int(dates_str.str.contains("2026-06-23").sum())
+                result["current_session_added"] = int(dates_str.str.contains(target_session).sum())
             else:
                 result["current_session_added"] = 0
                 
