@@ -57,6 +57,7 @@ try:
         net_open_positions_from_trade_log,
     )
     from .paper_portfolio_monitor import write_paper_portfolio_monitor
+    from .intraday_paper_monitor import write_intraday_paper_monitor
     from .paper_ops_dashboard import write_paper_ops_dashboard
     from .paper_decision_inbox import write_paper_decision_inbox
     from .execution_engine import run_execution_preview
@@ -131,6 +132,7 @@ except ImportError:
         net_open_positions_from_trade_log,
     )
     from paper_portfolio_monitor import write_paper_portfolio_monitor
+    from intraday_paper_monitor import write_intraday_paper_monitor
     from paper_ops_dashboard import write_paper_ops_dashboard
     from paper_decision_inbox import write_paper_decision_inbox
     from execution_engine import run_execution_preview
@@ -6752,6 +6754,20 @@ def run_paper_ops_dashboard(data_folder="hisseler", report_output_dir="reports")
     print(f"Paper ops dashboard json: {latest_dir / 'paper_ops_dashboard.json'}")
     print(f"next_action: {dashboard.get('next_action', '')}")
     return dashboard
+
+
+def run_intraday_paper_monitor(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    data_path = Path(data_folder)
+    if not data_path.is_absolute():
+        data_path = Path(__file__).resolve().parent / data_path
+    result = write_intraday_paper_monitor(data_path, latest_dir)
+    print(f"Intraday paper monitor csv: {result['csv_path']}")
+    print(f"Intraday paper monitor md: {result['md_path']}")
+    print(f"Intraday paper monitor json: {result['json_path']}")
+    print(f"open_positions_count: {result['summary'].get('open_positions_count', 0)}")
+    print(f"accepted_pending_orders_count: {result['summary'].get('accepted_pending_orders_count', 0)}")
+    return result
 
 
 def run_paper_decision_inbox(data_folder="hisseler", report_output_dir="reports"):
