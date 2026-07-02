@@ -1,5 +1,7 @@
 alpaca-py
+numpy
 pandas
+pandas_market_calendars
 schedule
 matplotlib
 yfinance
