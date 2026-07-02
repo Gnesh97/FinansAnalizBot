@@ -59,6 +59,8 @@ SAFETY_FLAGS = {
     "post_request_used": False,
 }
 
+ACCEPTED_PENDING_STATUSES = {"PENDING", "PENDING_NEXT_OPEN", "WAIT_FOR_NEXT_OPEN"}
+
 
 def _clean_text(value) -> str:
     if pd.isna(value):
@@ -275,8 +277,10 @@ def _accepted_pending(pending: pd.DataFrame, rth_by_symbol: dict[str, pd.DataFra
     if pending is None or pending.empty:
         return pd.DataFrame()
     status = pending.get("status", pd.Series("", index=pending.index)).astype(str).str.upper()
+    fill_status = pending.get("fill_status", pd.Series("", index=pending.index)).astype(str).str.upper()
     decision = pending.get("user_decision", pd.Series("", index=pending.index)).astype(str).str.upper()
-    accepted = pending[decision.eq("ACCEPT") & status.eq("PENDING_NEXT_OPEN")].copy()
+    pending_status = status.isin(ACCEPTED_PENDING_STATUSES) | fill_status.isin(ACCEPTED_PENDING_STATUSES)
+    accepted = pending[decision.eq("ACCEPT") & pending_status].copy()
     rows = []
     for _, row in accepted.iterrows():
         symbol = str(row.get("symbol", "")).upper().strip()

@@ -91,11 +91,15 @@ def _data_policy_maps(policy: pd.DataFrame) -> tuple[set[str], set[str]]:
     return blocked_symbols, warning_symbols
 
 
-def _open_symbols(trade_log: pd.DataFrame) -> set[str]:
+def _open_position_keys(trade_log: pd.DataFrame) -> set[tuple[str, str]]:
     open_positions = net_open_positions_from_trade_log(trade_log)
-    if open_positions.empty or "symbol" not in open_positions:
+    if open_positions.empty or "symbol" not in open_positions or "strategy_name" not in open_positions:
         return set()
-    return set(open_positions["symbol"].dropna().astype(str).str.upper().tolist())
+    return {
+        (_text(row.get("strategy_name", "")), _text(row.get("symbol", "")).upper())
+        for _, row in open_positions.iterrows()
+        if _text(row.get("strategy_name", "")) and _text(row.get("symbol", ""))
+    }
 
 
 def _is_pending_fill(fill_status: str) -> bool:
@@ -106,9 +110,10 @@ def _is_review_decision(user_decision: str) -> bool:
     return user_decision in {"HOLD_REVIEW", "REVIEW_REQUIRED", ""}
 
 
-def _valid_exit(row, open_symbols: set[str]) -> bool:
+def _valid_exit(row, open_keys: set[tuple[str, str]]) -> bool:
+    strategy = _text(row.get("strategy_name", ""))
     symbol = _text(row.get("symbol", "")).upper()
-    if symbol not in open_symbols:
+    if (strategy, symbol) not in open_keys:
         return False
     reason = _text(row.get("reason", "")).lower()
     warning = _text(row.get("warning", "")).lower()
@@ -135,18 +140,21 @@ def _candidate_rows(signals: pd.DataFrame, pending: pd.DataFrame) -> pd.DataFram
     return combined.drop_duplicates("_key", keep="last").drop(columns=["_key"])
 
 
-def _classify(row, open_symbols: set[str], blocked_symbols: set[str], warning_symbols: set[str]) -> tuple[str, str, bool, bool, bool]:
+def _classify(row, open_keys: set[tuple[str, str]], blocked_symbols: set[str], warning_symbols: set[str]) -> tuple[str, str, bool, bool, bool]:
+    strategy = _text(row.get("strategy_name", ""))
     symbol = _text(row.get("symbol", "")).upper()
     action = _text(row.get("action", "")).upper()
     fill_status = _text(row.get("fill_status", row.get("status", ""))).upper()
     user_decision = _text(row.get("user_decision", "HOLD_REVIEW")).upper()
     liquidity_pass = _bool_value(row.get("liquidity_guard_pass", False))
-    already_open = symbol in open_symbols
+    already_open = (strategy, symbol) in open_keys
     data_blocked = symbol in blocked_symbols
-    valid_exit = action == "SELL" and _valid_exit(row, open_symbols)
+    valid_exit = action == "SELL" and _valid_exit(row, open_keys)
     warning = _text(row.get("warning", ""))
     has_nonblocking_warning = bool(warning) or symbol in warning_symbols
 
+    if action == "BUY" and already_open:
+        return "BLOCKED", "BLOCK_DO_NOT_ACCEPT", already_open, valid_exit, data_blocked
     if user_decision == "ACCEPT":
         if _is_pending_fill(fill_status):
             return "WAIT_FOR_NEXT_OPEN", "WAIT_FOR_NEXT_OPEN", already_open, valid_exit, data_blocked
@@ -160,8 +168,6 @@ def _classify(row, open_symbols: set[str], blocked_symbols: set[str], warning_sy
     if not _is_pending_fill(fill_status):
         return "NEEDS_REVIEW", "REVIEW_WARNING", already_open, valid_exit, data_blocked
     if action == "BUY":
-        if already_open:
-            return "BLOCKED", "BLOCK_DO_NOT_ACCEPT", already_open, valid_exit, data_blocked
         if not _is_review_decision(user_decision):
             return "NEEDS_REVIEW", "REVIEW_WARNING", already_open, valid_exit, data_blocked
         if has_nonblocking_warning:
@@ -185,7 +191,7 @@ def build_paper_decision_inbox(latest_dir: str | Path) -> pd.DataFrame:
     policy = _read_csv(latest / "data_policy_decisions.csv")
     decisions = _review_lookup(review)
     pending_rows = _pending_lookup(pending)
-    open_symbols = _open_symbols(trade_log)
+    open_keys = _open_position_keys(trade_log)
     blocked_symbols, warning_symbols = _data_policy_maps(policy)
     candidates = _candidate_rows(signals, pending)
     rows = []
@@ -204,7 +210,7 @@ def build_paper_decision_inbox(latest_dir: str | Path) -> pd.DataFrame:
             row["user_decision"] = review_decision
         status, recommended, already_open, valid_exit, data_blocked = _classify(
             row,
-            open_symbols,
+            open_keys,
             blocked_symbols,
             warning_symbols,
         )

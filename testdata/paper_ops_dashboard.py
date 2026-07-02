@@ -98,10 +98,19 @@ def _pending_workflow(latest_dir: Path) -> dict[str, object]:
     if pending.empty:
         accepted = pending
         hold_review = pending
+        blocked_duplicate_buy = pending
     else:
         decision = pending.get("user_decision", pd.Series("", index=pending.index)).fillna("").astype(str).str.upper()
+        status = pending.get("status", pending.get("fill_status", pd.Series("", index=pending.index))).fillna("").astype(str).str.upper()
+        action = pending.get("action", pd.Series("", index=pending.index)).fillna("").astype(str).str.upper()
+        reason = pending.get("reason", pd.Series("", index=pending.index)).fillna("").astype(str)
         accepted = pending[decision.eq("ACCEPT")]
         hold_review = pending[decision.isin(["HOLD_REVIEW", "REVIEW_REQUIRED", ""])]
+        blocked_duplicate_buy = pending[
+            status.eq("BLOCKED")
+            & action.eq("BUY")
+            & reason.str.contains("buy_already_open|already_open_position", case=False, na=False)
+        ]
     accepted_action = accepted.get("action", pd.Series("", index=accepted.index)).fillna("").astype(str).str.upper()
     review_decision = (
         review.get("user_decision", pd.Series("", index=review.index)).fillna("").astype(str).str.upper()
@@ -124,6 +133,8 @@ def _pending_workflow(latest_dir: Path) -> dict[str, object]:
         ),
         "hold_review_count": int(len(needing_symbols)),
         "symbols_needing_operator_decision": sorted(needing_symbols),
+        "blocked_duplicate_buy_symbols": _symbols(blocked_duplicate_buy.get("symbol", pd.Series(dtype=str))),
+        "blocked_duplicate_buy_count": int(len(blocked_duplicate_buy)),
         "next_open_data_required": next_open_required,
     }
 
@@ -221,6 +232,8 @@ def build_paper_ops_dashboard(latest_dir: str | Path) -> dict[str, object]:
     risk = {
         "duplicate_open_symbols": monitor_checks.get("duplicate_open_symbol_count", "unknown"),
         "pending_buy_already_open_symbols": monitor_checks.get("pending_buy_already_open_symbols", "unknown"),
+        "blocked_duplicate_buy_symbols": pending["blocked_duplicate_buy_symbols"],
+        "blocked_duplicate_buy_count": pending["blocked_duplicate_buy_count"],
         "pending_sell_without_open_position_symbols": monitor_checks.get("pending_sell_without_open_position_symbols", "unknown"),
         "data_policy_blocking_symbols": data_policy["data_policy_blocking_symbols"],
         "missing_mark_price_symbols": monitor_checks.get("missing_mark_price_symbols", "unknown"),

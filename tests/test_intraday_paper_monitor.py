@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from testdata.intraday_paper_monitor import build_intraday_paper_monitor, write_intraday_paper_monitor
+from testdata.paper_ops_dashboard import build_paper_ops_dashboard
 from testdata.paper_state_manager import write_order_review, write_pending_orders, write_trade_log
 
 
@@ -31,13 +32,13 @@ def _trade(symbol, action="BUY", price=10.0, shares=2.0):
     }
 
 
-def _pending(symbol):
+def _pending(symbol, *, status="PENDING_NEXT_OPEN", user_decision="ACCEPT", action="BUY", reason="fixture_pending"):
     return {
         "created_at": "2026-01-05 16:00:00",
         "signal_date": FIXTURE_SIGNAL_DATE,
         "strategy_name": FIXTURE_STRATEGY,
         "symbol": symbol,
-        "action": "BUY",
+        "action": action,
         "paper_rank": 1,
         "ranking_score": 1.0,
         "paper_capital": 1000.0,
@@ -45,9 +46,9 @@ def _pending(symbol):
         "liquidity_guard_pass": True,
         "estimated_dollar_volume": 1000000.0,
         "order_size_pct_of_dollar_volume": 0.01,
-        "status": "PENDING_NEXT_OPEN",
-        "user_decision": "ACCEPT",
-        "reason": "fixture_pending",
+        "status": status,
+        "user_decision": user_decision,
+        "reason": reason,
         "expected_next_open_date": FIXTURE_NEXT_OPEN,
     }
 
@@ -126,6 +127,77 @@ class IntradayPaperMonitorTest(unittest.TestCase):
             self.assertEqual(bool(pending.iloc[0]["has_target_session_5min_rows"]), True)
             self.assertEqual(float(pending.iloc[0]["hypothetical_5min_fill_price"]), 20.5)
             self.assertEqual(bool(pending.iloc[0]["would_fill_if_5min_execution_enabled"]), True)
+
+    def test_accept_wait_for_next_open_counts_as_accepted_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest = root / "reports" / "latest"
+            write_trade_log(latest, pd.DataFrame())
+            write_pending_orders(latest, pd.DataFrame([_pending("WAIT", status="WAIT_FOR_NEXT_OPEN")]))
+            write_order_review(latest, pd.DataFrame())
+            _write_raw_5min(root, "WAIT", _rth_rows(FIXTURE_NEXT_OPEN, [21.0]))
+
+            result = build_intraday_paper_monitor(root / "hisseler", latest)
+
+            self.assertEqual(result["summary"]["accepted_pending_orders_count"], 1)
+            self.assertEqual(len(result["pending_readiness"]), 1)
+
+    def test_accept_pending_status_counts_as_accepted_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest = root / "reports" / "latest"
+            write_trade_log(latest, pd.DataFrame())
+            write_pending_orders(latest, pd.DataFrame([_pending("PEND", status="PENDING")]))
+            write_order_review(latest, pd.DataFrame())
+            _write_raw_5min(root, "PEND", _rth_rows(FIXTURE_NEXT_OPEN, [21.0]))
+
+            result = build_intraday_paper_monitor(root / "hisseler", latest)
+
+            self.assertEqual(result["summary"]["accepted_pending_orders_count"], 1)
+
+    def test_review_and_blocked_rows_do_not_count_as_accepted_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest = root / "reports" / "latest"
+            write_trade_log(latest, pd.DataFrame())
+            rows = [
+                _pending("REV", status="PENDING", user_decision="REVIEW_REQUIRED"),
+                _pending("HOLD", status="PENDING", user_decision="HOLD_REVIEW"),
+                _pending("BLK", status="BLOCKED", user_decision="REVIEW_REQUIRED", reason="fixture;buy_already_open"),
+            ]
+            write_pending_orders(latest, pd.DataFrame(rows))
+            write_order_review(latest, pd.DataFrame())
+
+            result = build_intraday_paper_monitor(root / "hisseler", latest)
+
+            self.assertEqual(result["summary"]["accepted_pending_orders_count"], 0)
+            self.assertTrue(result["pending_readiness"].empty)
+
+    def test_accepted_pending_count_matches_ops_dashboard_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest = root / "reports" / "latest"
+            write_trade_log(latest, pd.DataFrame())
+            write_pending_orders(
+                latest,
+                pd.DataFrame(
+                    [
+                        _pending("SELL", status="PENDING", action="SELL"),
+                        _pending("REV", status="PENDING", user_decision="REVIEW_REQUIRED"),
+                        _pending("BLK", status="BLOCKED", user_decision="REVIEW_REQUIRED", reason="fixture;buy_already_open"),
+                    ]
+                ),
+            )
+            write_order_review(latest, pd.DataFrame())
+            _write_raw_5min(root, "SELL", _rth_rows(FIXTURE_NEXT_OPEN, [21.0]))
+
+            intraday = build_intraday_paper_monitor(root / "hisseler", latest)
+            ops = build_paper_ops_dashboard(latest)
+
+            self.assertEqual(
+                intraday["summary"]["accepted_pending_orders_count"],
+                ops["pending_workflow"]["accepted_pending_orders_count"],
+            )
 
     def test_missing_raw_5min_file_becomes_warning_not_crash(self):
         with tempfile.TemporaryDirectory() as tmp:

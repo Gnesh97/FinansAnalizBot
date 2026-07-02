@@ -159,6 +159,41 @@ class PaperDecisionInboxTest(unittest.TestCase):
 
             self.assertEqual(inbox.iloc[0]["recommended_operator_action"], "WAIT_FOR_NEXT_OPEN")
 
+    def test_already_accepted_buy_now_open_is_block_do_not_accept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            pending = [
+                {
+                    "symbol": "FIXA",
+                    "action": "BUY",
+                    "strategy_name": "fixture_strategy",
+                    "signal_date": "fixture-signal-date",
+                    "status": "PENDING",
+                    "user_decision": "ACCEPT",
+                    "liquidity_guard_pass": True,
+                }
+            ]
+            _write_base(
+                latest,
+                [],
+                pending=pending,
+                trades=[
+                    {
+                        "strategy_name": "fixture_strategy",
+                        "symbol": "FIXA",
+                        "action": "BUY",
+                        "shares": 1,
+                        "fill_status": "PAPER_FILLED",
+                    }
+                ],
+            )
+
+            inbox = build_paper_decision_inbox(latest)
+
+            self.assertEqual(inbox.iloc[0]["recommended_operator_action"], "BLOCK_DO_NOT_ACCEPT")
+            self.assertEqual(inbox.iloc[0]["eligibility_status"], "BLOCKED")
+            self.assertTrue(bool(inbox.iloc[0]["already_open_position"]))
+
     def test_write_report_does_not_mutate_paper_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             latest = Path(tmp)

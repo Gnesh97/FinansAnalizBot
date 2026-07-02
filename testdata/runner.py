@@ -60,6 +60,13 @@ try:
     from .intraday_paper_monitor import write_intraday_paper_monitor
     from .paper_ops_dashboard import write_paper_ops_dashboard
     from .paper_decision_inbox import write_paper_decision_inbox
+    from .paper_risk_dashboard import write_paper_risk_dashboard
+    from .closed_trade_report import write_closed_trade_report
+    from .no_lookahead_audit import write_no_lookahead_audit
+    from .execution_costs import write_execution_cost_preview
+    from .sqlite_state_reconciliation import write_sqlite_state_reconciliation
+    from .broker_reconciliation import write_broker_reconciliation
+    from .alpaca_paper_snapshot import read_alpaca_paper_snapshot
     from .execution_engine import run_execution_preview
     from .strategies.base import generate_strategy_signals
     from .strategies.cross_sectional_momentum import (
@@ -135,6 +142,13 @@ except ImportError:
     from intraday_paper_monitor import write_intraday_paper_monitor
     from paper_ops_dashboard import write_paper_ops_dashboard
     from paper_decision_inbox import write_paper_decision_inbox
+    from paper_risk_dashboard import write_paper_risk_dashboard
+    from closed_trade_report import write_closed_trade_report
+    from no_lookahead_audit import write_no_lookahead_audit
+    from execution_costs import write_execution_cost_preview
+    from sqlite_state_reconciliation import write_sqlite_state_reconciliation
+    from broker_reconciliation import write_broker_reconciliation
+    from alpaca_paper_snapshot import read_alpaca_paper_snapshot
     from execution_engine import run_execution_preview
     from strategies.base import generate_strategy_signals
     from strategies.cross_sectional_momentum import (
@@ -1266,6 +1280,7 @@ def _write_raw_5min_update_audit_report(data_folder, latest_dir, pending_orders)
 def run_paper_5min_fill_check(data_folder="hisseler", report_output_dir="reports", make_chatgpt_report=False):
     latest_dir, _run_dir = _report_output_paths(report_output_dir, data_folder)
     orders = _pending_5min_diagnostic_orders(latest_dir)
+    trade_log = read_trade_log(latest_dir)
     raw_dir = _raw_5min_dir(data_folder)
     rows = []
     fill_log_rows = []
@@ -1301,9 +1316,7 @@ def run_paper_5min_fill_check(data_folder="hisseler", report_output_dir="reports
         has_next_open = fill_timestamp is not None and pd.notna(fill_price)
         if has_next_open:
             filled_order_indices.append(order.name)
-            notional = pd.to_numeric(pd.Series([order.get("paper_position_notional", pd.NA)]), errors="coerce").iloc[0]
-            price = float(fill_price)
-            shares = round(float(notional) / price, 6) if pd.notna(notional) and price > 0 else 0.0
+            shares = _paper_fill_shares_for_order(order, fill_price, trade_log)
             fill_log_rows.append(
                 {
                     "date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -3687,20 +3700,12 @@ def _load_paper_positions(path):
     positions = {}
     if ledger.empty:
         return positions, True
-    for _, row in ledger.iterrows():
+    open_positions = net_open_positions_from_trade_log(ledger)
+    for _, row in open_positions.iterrows():
         strategy = str(row.get("strategy_name", "")).strip()
         symbol = str(row.get("symbol", "")).strip().upper()
-        action = str(row.get("action", "")).strip().upper()
-        fill_status = str(row.get("fill_status", "")).strip().upper()
-        if not strategy or not symbol:
-            continue
-        if fill_status and fill_status != "PAPER_FILLED":
-            continue
-        key = (strategy, symbol)
-        if action in {"BUY", "ENTRY"}:
-            positions[key] = True
-        elif action in {"SELL", "EXIT", "CLOSE"}:
-            positions.pop(key, None)
+        if strategy and symbol:
+            positions[(strategy, symbol)] = True
     return positions, False
 
 
@@ -4080,6 +4085,66 @@ def _next_open_fill_for_signal(asset_data, symbol, signal_date):
     return empty
 
 
+def _paper_open_shares_for_order(trade_log, strategy_name, symbol):
+    frame = trade_log.copy() if trade_log is not None else pd.DataFrame()
+    if frame.empty:
+        return 0.0
+    status = frame.get("fill_status", pd.Series("", index=frame.index)).astype(str).str.upper()
+    filled = frame[status.eq("PAPER_FILLED")].copy()
+    if filled.empty:
+        return 0.0
+    strategy = filled.get("strategy_name", pd.Series("", index=filled.index)).astype(str)
+    symbols = filled.get("symbol", pd.Series("", index=filled.index)).astype(str).str.upper()
+    action = filled.get("action", pd.Series("", index=filled.index)).astype(str).str.upper()
+    shares = pd.to_numeric(filled.get("shares", pd.Series(0.0, index=filled.index)), errors="coerce").fillna(0.0)
+    mask = strategy.eq(str(strategy_name)) & symbols.eq(str(symbol).upper())
+    signed = shares.where(action.eq("BUY"), -shares.where(action.eq("SELL"), 0.0))
+    net_shares = float(signed[mask].sum()) if mask.any() else 0.0
+    return round(max(net_shares, 0.0), 6)
+
+
+def _paper_open_position_keys_from_trade_log(trade_log):
+    open_positions = net_open_positions_from_trade_log(trade_log)
+    if open_positions.empty:
+        return set()
+    return {
+        (str(row.get("strategy_name", "")).strip(), str(row.get("symbol", "")).strip().upper())
+        for _, row in open_positions.iterrows()
+        if str(row.get("strategy_name", "")).strip() and str(row.get("symbol", "")).strip()
+    }
+
+
+def _is_duplicate_open_buy(row, open_position_keys):
+    action = str(row.get("action", "")).strip().upper()
+    if action != "BUY":
+        return False
+    key = (
+        str(row.get("strategy_name", "")).strip(),
+        str(row.get("symbol", "")).strip().upper(),
+    )
+    return key in open_position_keys
+
+
+def _append_semicolon_token(value, token):
+    text = str(value or "").strip()
+    if token in {part.strip() for part in text.split(";") if part.strip()}:
+        return text
+    return f"{text};{token}" if text else token
+
+
+def _paper_fill_shares_for_order(row, fill_price, trade_log):
+    action = str(row.get("action", "")).strip().upper()
+    if action == "SELL":
+        return _paper_open_shares_for_order(
+            trade_log,
+            row.get("strategy_name", ""),
+            row.get("symbol", ""),
+        )
+    price = pd.to_numeric(pd.Series([fill_price]), errors="coerce").iloc[0]
+    notional = pd.to_numeric(pd.Series([row.get("paper_position_notional", pd.NA)]), errors="coerce").iloc[0]
+    return round(float(notional) / float(price), 6) if pd.notna(notional) and pd.notna(price) and float(price) > 0 else 0.0
+
+
 def _apply_paper_order_review(paper_report, review, trade_log_path, asset_data):
     log = _ensure_paper_trade_log(trade_log_path)
     if paper_report is None or paper_report.empty:
@@ -4094,6 +4159,7 @@ def _apply_paper_order_review(paper_report, review, trade_log_path, asset_data):
     } if review is not None and not review.empty else {}
     output = paper_report.copy()
     new_log_rows = []
+    open_position_keys = _paper_open_position_keys_from_trade_log(log)
     existing_keys = set()
     if not log.empty:
         for _, row in log.iterrows():
@@ -4113,6 +4179,12 @@ def _apply_paper_order_review(paper_report, review, trade_log_path, asset_data):
         decision = decision_by_key.get(key, "HOLD_REVIEW")
         output.loc[index, "user_decision"] = decision
         if decision == "ACCEPT":
+            if _is_duplicate_open_buy(row, open_position_keys):
+                output.loc[index, "user_decision"] = "REVIEW_REQUIRED"
+                output.loc[index, "fill_status"] = "BLOCKED"
+                output.loc[index, "reason"] = _append_semicolon_token(row.get("reason", ""), "buy_already_open")
+                output.loc[index, "warning"] = _append_semicolon_token(row.get("warning", ""), "already_open_position")
+                continue
             fill = _next_open_fill_for_signal(asset_data, row.get("symbol"), row.get("signal_date"))
             fill_price = fill["fill_price"]
             if pd.notna(fill_price):
@@ -4120,7 +4192,7 @@ def _apply_paper_order_review(paper_report, review, trade_log_path, asset_data):
                 output.loc[index, "fill_status"] = fill_status
                 output.loc[index, "fill_bar_timestamp"] = fill["fill_bar_timestamp"]
                 output.loc[index, "fill_price_source"] = fill["fill_price_source"]
-                shares = round(float(row.get("paper_position_notional", 0.0)) / float(fill_price), 6) if float(fill_price) > 0 else 0.0
+                shares = _paper_fill_shares_for_order(row, fill_price, log)
                 log_key = (
                     str(row.get("strategy_name", "")),
                     str(row.get("symbol", "")).upper(),
@@ -4244,6 +4316,7 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
             )
     rows_to_append = []
     log_rows = []
+    open_position_keys = _paper_open_position_keys_from_trade_log(log)
     pending = previous_report[
         previous_report.get("fill_status", pd.Series("", index=previous_report.index)).astype(str).str.upper().eq("PENDING_NEXT_OPEN")
         & previous_report.get("user_decision", pd.Series("", index=previous_report.index)).astype(str).str.upper().eq("ACCEPT")
@@ -4290,6 +4363,14 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
                 if "latest_review_not_accept" not in reason:
                     carried["reason"] = f"{reason};latest_review_not_accept" if reason else "latest_review_not_accept"
         else:
+            if _is_duplicate_open_buy(row, open_position_keys):
+                carried["user_decision"] = "REVIEW_REQUIRED"
+                carried["fill_status"] = "BLOCKED"
+                carried["reason"] = _append_semicolon_token(carried.get("reason", ""), "buy_already_open")
+                carried["warning"] = _append_semicolon_token(carried.get("warning", ""), "already_open_position")
+                if order_id not in existing_orders:
+                    rows_to_append.append(carried)
+                continue
             fill = _next_open_fill_for_signal(asset_data, row.get("symbol"), row.get("signal_date"))
             fill_price = fill["fill_price"]
             if pd.notna(fill_price):
@@ -4298,7 +4379,7 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
                 carried["fill_price_source"] = fill["fill_price_source"]
                 log_key = (*order_id, "PAPER_FILLED")
                 if log_key not in existing_log_keys:
-                    shares = round(float(row.get("paper_position_notional", 0.0)) / float(fill_price), 6) if float(fill_price) > 0 else 0.0
+                    shares = _paper_fill_shares_for_order(row, fill_price, log)
                     log_rows.append(
                         {
                             "date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -4343,14 +4424,29 @@ def _apply_previous_pending_next_open_orders(current_report, previous_report, re
     return output[_paper_signal_columns()]
 
 
-def _write_paper_pending_orders(paper_report, path, latest_daily_date="none"):
+def _write_paper_pending_orders(paper_report, path, latest_daily_date="none", trade_log_path=None):
     rows = []
+    trade_path = Path(trade_log_path) if trade_log_path is not None else Path(path).parent / "paper_trade_log.csv"
+    trade_log = read_trade_log(trade_path.parent) if trade_path.exists() else pd.DataFrame()
+    open_position_keys = _paper_open_position_keys_from_trade_log(trade_log)
     actionable = paper_report[
         paper_report.get("paper_actionable", pd.Series(False, index=paper_report.index)).astype(bool)
         & paper_report["action"].isin(["BUY", "SELL"])
     ].copy() if paper_report is not None and not paper_report.empty else pd.DataFrame()
     for _, row in actionable.iterrows():
         status = "FILLED" if row.get("fill_status") == "PAPER_FILLED" else ("REJECTED" if row.get("fill_status") == "REJECTED" else "PENDING")
+        user_decision = (
+            "REVIEW_REQUIRED"
+            if str(row.get("user_decision", "HOLD_REVIEW")).upper() == "HOLD_REVIEW"
+            else row.get("user_decision", "REVIEW_REQUIRED")
+        )
+        reason = row.get("reason", "")
+        notes = ""
+        if _is_duplicate_open_buy(row, open_position_keys):
+            status = "BLOCKED"
+            user_decision = "REVIEW_REQUIRED"
+            reason = _append_semicolon_token(reason, "buy_already_open")
+            notes = "stale_accept_revalidation:already_open_position"
         aging = _pending_order_age_fields(row.get("signal_date", ""), latest_daily_date)
         rows.append(
             {
@@ -4367,12 +4463,10 @@ def _write_paper_pending_orders(paper_report, path, latest_daily_date="none"):
                 "estimated_dollar_volume": row.get("estimated_dollar_volume", pd.NA),
                 "order_size_pct_of_dollar_volume": row.get("order_size_pct_of_dollar_volume", pd.NA),
                 "status": status,
-                "user_decision": "REVIEW_REQUIRED"
-                if str(row.get("user_decision", "HOLD_REVIEW")).upper() == "HOLD_REVIEW"
-                else row.get("user_decision", "REVIEW_REQUIRED"),
-                "reason": row.get("reason", ""),
+                "user_decision": user_decision,
+                "reason": reason,
                 **aging,
-                "notes": "",
+                "notes": notes,
             }
         )
     pending = ensure_columns(pd.DataFrame(rows), _paper_pending_order_columns(), fill_value=pd.NA)
@@ -6779,6 +6873,92 @@ def run_paper_decision_inbox(data_folder="hisseler", report_output_dir="reports"
     return result
 
 
+def run_paper_risk_dashboard(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    result = write_paper_risk_dashboard(latest_dir)
+    dashboard = result.get("dashboard", {})
+    risk = dashboard.get("risk_limits", {}) if isinstance(dashboard, dict) else {}
+    print(f"Paper risk dashboard: {latest_dir / 'paper_risk_dashboard.md'}")
+    print(f"Paper risk dashboard csv: {latest_dir / 'paper_risk_dashboard.csv'}")
+    print(f"Paper risk dashboard json: {latest_dir / 'paper_risk_dashboard.json'}")
+    print(f"risk_status: {risk.get('risk_status', '')}")
+    return result
+
+
+def run_closed_trade_report(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    result = write_closed_trade_report(latest_dir)
+    summary = result.get("summary", {})
+    print(f"Closed trade report: {latest_dir / 'closed_trade_report.md'}")
+    print(f"Closed trade report csv: {latest_dir / 'closed_trade_report.csv'}")
+    print(f"Closed trade report json: {latest_dir / 'closed_trade_report.json'}")
+    print(f"closed_trade_count: {summary.get('closed_trade_count', 0)}")
+    print(f"total_realized_pnl: {summary.get('total_realized_pnl', 0)}")
+    return result
+
+
+def run_no_lookahead_audit(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    data_path = Path(data_folder)
+    if not data_path.is_absolute():
+        data_path = Path(__file__).resolve().parent / data_path
+    result = write_no_lookahead_audit(latest_dir, data_path)
+    summary = result.get("summary", {})
+    print(f"No-lookahead audit: {latest_dir / 'no_lookahead_audit.md'}")
+    print(f"No-lookahead audit csv: {latest_dir / 'no_lookahead_audit.csv'}")
+    print(f"No-lookahead audit json: {latest_dir / 'no_lookahead_audit.json'}")
+    print(f"audit_status: {summary.get('audit_status', '')}")
+    return result
+
+
+def run_execution_cost_preview(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    result = write_execution_cost_preview(latest_dir)
+    summary = result.get("summary", {})
+    print(f"Execution cost preview: {latest_dir / 'execution_cost_preview.md'}")
+    print(f"Execution cost preview csv: {latest_dir / 'execution_cost_preview.csv'}")
+    print(f"Execution cost preview json: {latest_dir / 'execution_cost_preview.json'}")
+    print(f"total_execution_cost: {summary.get('total_execution_cost', 0)}")
+    return result
+
+
+def run_sqlite_state_reconciliation(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    db_path = resolve_project_path("state/trading_state.sqlite3", data_folder)
+    result = write_sqlite_state_reconciliation(latest_dir, db_path)
+    summary = result.get("summary", {})
+    print(f"SQLite state reconciliation: {latest_dir / 'sqlite_state_reconciliation.md'}")
+    print(f"SQLite state reconciliation csv: {latest_dir / 'sqlite_state_reconciliation.csv'}")
+    print(f"SQLite state reconciliation json: {latest_dir / 'sqlite_state_reconciliation.json'}")
+    print(f"reconciliation_status: {summary.get('reconciliation_status', '')}")
+    return result
+
+
+def run_broker_reconciliation(data_folder="hisseler", report_output_dir="reports", alpaca_paper_snapshot_readonly=False):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    broker_snapshot = None
+    if alpaca_paper_snapshot_readonly:
+        env_path = Path(data_folder).resolve().parents[1] / ".env"
+        if not env_path.exists():
+            env_path = Path.cwd() / ".env"
+        api_key, secret_key, base_url = _alpaca_config(env_path)
+        broker_snapshot = read_alpaca_paper_snapshot(
+            api_key=api_key,
+            secret_key=secret_key,
+            base_url=base_url,
+            broker_submit_enabled=False,
+            live_trading_enabled=False,
+        )
+    result = write_broker_reconciliation(latest_dir, broker_snapshot=broker_snapshot)
+    summary = result.get("summary", {})
+    print(f"Broker reconciliation: {latest_dir / 'broker_reconciliation.md'}")
+    print(f"Broker reconciliation csv: {latest_dir / 'broker_reconciliation.csv'}")
+    print(f"Broker reconciliation json: {latest_dir / 'broker_reconciliation.json'}")
+    print(f"reconciliation_status: {summary.get('reconciliation_status', '')}")
+    print(f"broker_snapshot_source: {summary.get('broker_snapshot_source', '')}")
+    return result
+
+
 def _run_liquidity_guard_sensitivity_report(
     experiments,
     data_folder,
@@ -7424,6 +7604,7 @@ def run_strategy_experiments(
             paper_signal_report,
             latest_dir / "paper_pending_orders.csv",
             latest_daily_for_pending,
+            latest_dir / "paper_trade_log.csv",
         )
         write_paper_portfolio_monitor(
             latest_dir,
@@ -7467,6 +7648,7 @@ def run_strategy_experiments(
                     paper_signal_report,
                     directory / "paper_pending_orders.csv",
                     latest_daily_for_pending,
+                    latest_dir / "paper_trade_log.csv",
                 )
                 write_paper_portfolio_monitor(
                     directory,

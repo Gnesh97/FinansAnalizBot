@@ -162,6 +162,29 @@ class PaperOpsDashboardTest(unittest.TestCase):
             self.assertEqual(dashboard["pending_workflow"]["symbols_needing_operator_decision"], ["FIXH"])
             self.assertEqual(dashboard["next_action"], "review paper decisions")
 
+    def test_dashboard_surfaces_blocked_duplicate_buy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            _write_common_reports(latest)
+            _write_monitor(latest, pending=False)
+            pd.DataFrame(
+                [
+                    {
+                        "symbol": "FIXD",
+                        "action": "BUY",
+                        "status": "BLOCKED",
+                        "user_decision": "REVIEW_REQUIRED",
+                        "reason": "fixture_reason;buy_already_open",
+                    }
+                ]
+            ).to_csv(latest / "paper_pending_orders.csv", index=False)
+            pd.DataFrame(columns=["symbol", "action", "user_decision"]).to_csv(latest / "paper_order_review.csv", index=False)
+
+            dashboard = build_paper_ops_dashboard(latest)
+
+            self.assertEqual(dashboard["pending_workflow"]["blocked_duplicate_buy_symbols"], ["FIXD"])
+            self.assertEqual(dashboard["risk_consistency"]["blocked_duplicate_buy_symbols"], ["FIXD"])
+
     def test_dashboard_reports_safety_false_and_does_not_mutate_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             latest = Path(tmp)

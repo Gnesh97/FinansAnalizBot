@@ -3,13 +3,13 @@ try:
     import sys
     from pathlib import Path
 
-    from .runner import run_alpaca_paper_check, run_execution_preview_check, run_intraday_paper_monitor, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_pending_5min_refresh, run_strategy_experiments, run_universe_scanner
+    from .runner import run_alpaca_paper_check, run_broker_reconciliation, run_closed_trade_report, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 except ImportError:
     import argparse
     import sys
     from pathlib import Path
 
-    from runner import run_alpaca_paper_check, run_execution_preview_check, run_intraday_paper_monitor, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_pending_5min_refresh, run_strategy_experiments, run_universe_scanner
+    from runner import run_alpaca_paper_check, run_broker_reconciliation, run_closed_trade_report, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 
 
 VALIDATION_EXPERIMENTS = [
@@ -263,6 +263,41 @@ if __name__ == "__main__":
         action="store_true",
         help="Write report-only local paper decision inbox from existing latest reports; no state mutation.",
     )
+    parser.add_argument(
+        "--paper-risk-dashboard",
+        action="store_true",
+        help="Write report-only local paper portfolio risk dashboard from existing latest reports; no state mutation.",
+    )
+    parser.add_argument(
+        "--closed-trade-report",
+        action="store_true",
+        help="Write report-only local paper closed trade and realized PnL report; no state mutation.",
+    )
+    parser.add_argument(
+        "--no-lookahead-audit",
+        action="store_true",
+        help="Write report-only no-lookahead and fill timing audit; no state mutation.",
+    )
+    parser.add_argument(
+        "--execution-cost-preview",
+        action="store_true",
+        help="Write report-only zero-cost execution cost preview from paper trade log; no state mutation.",
+    )
+    parser.add_argument(
+        "--sqlite-state-reconciliation",
+        action="store_true",
+        help="Write report-only CSV-vs-SQLite state reconciliation; CSV remains source of truth.",
+    )
+    parser.add_argument(
+        "--broker-reconciliation",
+        action="store_true",
+        help="Write report-only local-vs-broker reconciliation skeleton; no broker submit or POST.",
+    )
+    parser.add_argument(
+        "--alpaca-paper-snapshot-readonly",
+        action="store_true",
+        help="Use explicit GET-only Alpaca paper snapshot for broker reconciliation; disabled by default.",
+    )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)
     data_folder = Path(__file__).resolve().parent / "hisseler"
@@ -300,6 +335,24 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if args.paper_decision_inbox:
         run_paper_decision_inbox(str(data_folder))
+        raise SystemExit(0)
+    if args.paper_risk_dashboard:
+        run_paper_risk_dashboard(str(data_folder))
+        raise SystemExit(0)
+    if args.closed_trade_report:
+        run_closed_trade_report(str(data_folder))
+        raise SystemExit(0)
+    if args.no_lookahead_audit:
+        run_no_lookahead_audit(str(data_folder))
+        raise SystemExit(0)
+    if args.execution_cost_preview:
+        run_execution_cost_preview(str(data_folder))
+        raise SystemExit(0)
+    if args.sqlite_state_reconciliation:
+        run_sqlite_state_reconciliation(str(data_folder))
+        raise SystemExit(0)
+    if args.broker_reconciliation:
+        run_broker_reconciliation(str(data_folder), alpaca_paper_snapshot_readonly=args.alpaca_paper_snapshot_readonly)
         raise SystemExit(0)
     run_strategy_experiments(
         str(data_folder),
