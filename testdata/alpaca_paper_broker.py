@@ -1,3 +1,4 @@
+import json
 from urllib import parse, request
 
 try:
@@ -87,3 +88,42 @@ class AlpacaPaperBroker(BrokerInterface):
         )
         with request.urlopen(req, timeout=20) as response:
             return json.loads(response.read().decode("utf-8"))
+
+
+class AlpacaPaperOrderSubmitClient:
+    def __init__(self, api_key="", secret_key="", base_url="https://paper-api.alpaca.markets", urlopen=None):
+        self.base_url = str(base_url or "").rstrip("/")
+        if "paper-api.alpaca.markets" not in self.base_url:
+            raise ValueError("Alpaca paper submit requires paper-api.alpaca.markets.")
+        self.api_key = api_key or ""
+        self.secret_key = secret_key or ""
+        self.urlopen = urlopen or request.urlopen
+        self.methods_used = []
+
+    def _request_json(self, method, endpoint, *, payload=None, query=None):
+        url = self.base_url + endpoint
+        if query:
+            url += "?" + parse.urlencode(query)
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {
+            "APCA-API-KEY-ID": self.api_key,
+            "APCA-API-SECRET-KEY": self.secret_key,
+            "Accept": "application/json",
+        }
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        req = request.Request(url, data=data, headers=headers, method=method)
+        self.methods_used.append(method)
+        with self.urlopen(req, timeout=20) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body) if body else {}
+
+    def post_order(self, payload):
+        return self._request_json("POST", "/v2/orders", payload=payload)
+
+    def read_order_by_client_order_id(self, client_order_id):
+        return self._request_json(
+            "GET",
+            "/v2/orders:by_client_order_id",
+            query={"client_order_id": client_order_id},
+        )
