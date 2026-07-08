@@ -232,6 +232,13 @@ def build_broker_reconciliation(
         if broker_avg.get(symbol, 0.0) and abs(local_avg.get(symbol, 0.0) - broker_avg.get(symbol, 0.0)) > 1e-4
     ]
     position_fail = bool(missing_broker or extra_broker or qty_mismatch or avg_mismatch)
+    position_status_reason = "positions_match"
+    if position_fail:
+        position_status_reason = (
+            "position_mismatch_pre_cutover_possible_local_only_history"
+            if missing_broker and not broker_syms
+            else "position_mismatch"
+        )
     checks.extend(
         [
             _check("position_reconciliation", "local_open_position_count", len(local_syms), len(broker_syms), "PASS" if len(local_syms) == len(broker_syms) else "FAIL", "position_count"),
@@ -239,7 +246,7 @@ def build_broker_reconciliation(
             _check("position_reconciliation", "symbols_in_broker_not_local", "none", ",".join(extra_broker) or "none", "PASS" if not extra_broker else "FAIL", "extra_broker_positions"),
             _check("position_reconciliation", "share_qty_mismatch_count", len(qty_mismatch), ",".join(qty_mismatch) or "none", "PASS" if not qty_mismatch else "FAIL", "share_quantity"),
             _check("position_reconciliation", "avg_price_mismatch_count", len(avg_mismatch), ",".join(avg_mismatch) or "none", "PASS" if not avg_mismatch else "FAIL", "average_price"),
-            _check("position_reconciliation", "position_reconciliation_status", "local", "broker", "FAIL" if position_fail else "PASS", "position_mismatch" if position_fail else "positions_match"),
+            _check("position_reconciliation", "position_reconciliation_status", "local", "broker", "FAIL" if position_fail else "PASS", position_status_reason),
         ]
     )
 
@@ -330,6 +337,9 @@ def _snapshot_metadata_checks(metadata: dict[str, object] | None) -> list[dict[s
         _check("alpaca_snapshot", "alpaca_endpoint_mode", "paper", metadata.get("alpaca_endpoint_mode", "unknown"), "PASS" if metadata.get("alpaca_endpoint_mode") == "paper" else "FAIL", "paper_endpoint_required"),
         _check("alpaca_snapshot", "alpaca_live_endpoint_blocked", False, bool(metadata.get("alpaca_live_endpoint_blocked", False)), "PASS" if not metadata.get("alpaca_live_endpoint_blocked", False) else "FAIL", "live_endpoint_block"),
         _check("alpaca_snapshot", "request_methods_used", "GET", metadata.get("request_methods_used", "none"), "PASS" if str(metadata.get("request_methods_used", "none")) in {"GET", "none"} else "FAIL", "get_only"),
+        _check("alpaca_snapshot", "alpaca_failure_category", "none", metadata.get("alpaca_failure_category", "") or "none", "PASS" if not metadata.get("alpaca_failure_category") else "WARNING", "sanitized_failure_category"),
+        _check("alpaca_snapshot", "alpaca_failure_endpoint", "none", metadata.get("alpaca_failure_endpoint", "") or "none", "PASS" if not metadata.get("alpaca_failure_endpoint") else "WARNING", "sanitized_endpoint"),
+        _check("alpaca_snapshot", "alpaca_sdk_import_status", "NOT_REQUIRED", metadata.get("alpaca_sdk_import_status", "NOT_REQUIRED"), "PASS", "urllib_get_only_no_sdk_import"),
     ]
 
 
@@ -367,6 +377,11 @@ def _summary(checks: list[dict[str, object]], snapshot_source: str, snapshot_met
         "would_submit_count": 0,
         "read_only_mode": True,
         "alpaca_snapshot_status": "NOT_REQUESTED",
+        "alpaca_snapshot_reason": "",
+        "alpaca_failure_category": "",
+        "alpaca_failure_endpoint": "",
+        "alpaca_failure_detail": "",
+        "alpaca_sdk_import_status": "NOT_REQUIRED",
         "alpaca_account_read_success": False,
         "alpaca_positions_read_success": False,
         "alpaca_open_orders_read_success": False,
@@ -377,6 +392,11 @@ def _summary(checks: list[dict[str, object]], snapshot_source: str, snapshot_met
     if snapshot_metadata:
         for key in [
             "alpaca_snapshot_status",
+            "alpaca_snapshot_reason",
+            "alpaca_failure_category",
+            "alpaca_failure_endpoint",
+            "alpaca_failure_detail",
+            "alpaca_sdk_import_status",
             "alpaca_account_read_success",
             "alpaca_positions_read_success",
             "alpaca_open_orders_read_success",

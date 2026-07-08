@@ -66,7 +66,10 @@ try:
     from .execution_costs import write_execution_cost_preview
     from .sqlite_state_reconciliation import write_sqlite_state_reconciliation
     from .broker_reconciliation import write_broker_reconciliation
-    from .alpaca_paper_snapshot import read_alpaca_paper_snapshot
+    from .broker_cutover_baseline import create_broker_cutover_baseline, write_broker_cutover_readiness
+    from .alpaca_paper_snapshot import read_alpaca_paper_assets, read_alpaca_paper_snapshot
+    from .alpaca_submit_readiness import write_alpaca_paper_submit_readiness
+    from .alpaca_paper_submit_one import write_alpaca_paper_submit_one
     from .execution_engine import run_execution_preview
     from .strategies.base import generate_strategy_signals
     from .strategies.cross_sectional_momentum import (
@@ -148,7 +151,10 @@ except ImportError:
     from execution_costs import write_execution_cost_preview
     from sqlite_state_reconciliation import write_sqlite_state_reconciliation
     from broker_reconciliation import write_broker_reconciliation
-    from alpaca_paper_snapshot import read_alpaca_paper_snapshot
+    from broker_cutover_baseline import create_broker_cutover_baseline, write_broker_cutover_readiness
+    from alpaca_paper_snapshot import read_alpaca_paper_assets, read_alpaca_paper_snapshot
+    from alpaca_submit_readiness import write_alpaca_paper_submit_readiness
+    from alpaca_paper_submit_one import write_alpaca_paper_submit_one
     from execution_engine import run_execution_preview
     from strategies.base import generate_strategy_signals
     from strategies.cross_sectional_momentum import (
@@ -6873,6 +6879,97 @@ def run_paper_decision_inbox(data_folder="hisseler", report_output_dir="reports"
     return result
 
 
+def run_apply_paper_order_review_decisions(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    pending = read_pending_orders(latest_dir)
+    review = read_order_review(latest_dir)
+    decisions = {}
+    for _, row in review.iterrows():
+        decisions[_paper_order_key(row)] = str(row.get("user_decision", "HOLD_REVIEW")).strip().upper() or "HOLD_REVIEW"
+
+    updated = pending.copy()
+    changed_rows = []
+    if not updated.empty and decisions:
+        for index, row in updated.iterrows():
+            key = _paper_order_key(row)
+            if key not in decisions:
+                continue
+            before = str(row.get("user_decision", "")).strip().upper()
+            after = decisions[key]
+            if before == after:
+                continue
+            updated.loc[index, "user_decision"] = after
+            changed_rows.append(
+                {
+                    "symbol": row.get("symbol", ""),
+                    "strategy_name": row.get("strategy_name", ""),
+                    "action": row.get("action", ""),
+                    "old_user_decision": before,
+                    "new_user_decision": after,
+                    "status": row.get("status", ""),
+                }
+            )
+    write_pending_orders(latest_dir, updated)
+    accepted = (
+        updated[
+            updated.get("user_decision", pd.Series("", index=updated.index)).astype(str).str.upper().eq("ACCEPT")
+            & updated.get("status", pd.Series("", index=updated.index)).astype(str).str.upper().isin(["PENDING", "PENDING_NEXT_OPEN"])
+        ].copy()
+        if not updated.empty
+        else pd.DataFrame()
+    )
+    summary = {
+        "review_rows": int(len(review)),
+        "pending_rows": int(len(updated)),
+        "changed_rows": int(len(changed_rows)),
+        "accepted_pending_rows": int(len(accepted)),
+        "state_mutated": True,
+        "trade_log_mutated": False,
+        "broker_submit_enabled": False,
+        "live_trading_enabled": False,
+        "short_trading_enabled": False,
+        "submit_order_called": False,
+        "post_request_used": False,
+    }
+    report_rows = changed_rows or [
+        {
+            "symbol": "none",
+            "strategy_name": "",
+            "action": "",
+            "old_user_decision": "",
+            "new_user_decision": "",
+            "status": "",
+        }
+    ]
+    pd.DataFrame(report_rows).to_csv(latest_dir / "paper_decision_apply_report.csv", index=False)
+    (latest_dir / "paper_decision_apply_report.md").write_text(
+        "\n".join(
+            [
+                "# Paper Decision Apply Report",
+                "",
+                f"- review_rows: {summary['review_rows']}",
+                f"- pending_rows: {summary['pending_rows']}",
+                f"- changed_rows: {summary['changed_rows']}",
+                f"- accepted_pending_rows: {summary['accepted_pending_rows']}",
+                "- trade_log_mutated: false",
+                "- broker_submit_enabled: false",
+                "- live_trading_enabled: false",
+                "- short_trading_enabled: false",
+                "- submit_order_called: false",
+                "- post_request_used: false",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"Paper decision apply: {latest_dir / 'paper_decision_apply_report.md'}")
+    print(f"changed_rows: {summary['changed_rows']}")
+    print(f"accepted_pending_rows: {summary['accepted_pending_rows']}")
+    print("broker_submit_enabled: false")
+    print("live_trading_enabled: false")
+    return {"summary": summary, "changed_rows": changed_rows, "latest_dir": str(latest_dir)}
+
+
 def run_paper_risk_dashboard(data_folder="hisseler", report_output_dir="reports"):
     latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
     result = write_paper_risk_dashboard(latest_dir)
@@ -6956,6 +7053,150 @@ def run_broker_reconciliation(data_folder="hisseler", report_output_dir="reports
     print(f"Broker reconciliation json: {latest_dir / 'broker_reconciliation.json'}")
     print(f"reconciliation_status: {summary.get('reconciliation_status', '')}")
     print(f"broker_snapshot_source: {summary.get('broker_snapshot_source', '')}")
+    return result
+
+
+def _read_alpaca_paper_snapshot_for_data_folder(data_folder):
+    env_path = Path(data_folder).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        env_path = Path.cwd() / ".env"
+    api_key, secret_key, base_url = _alpaca_config(env_path)
+    return read_alpaca_paper_snapshot(
+        api_key=api_key,
+        secret_key=secret_key,
+        base_url=base_url,
+        broker_submit_enabled=False,
+        live_trading_enabled=False,
+    )
+
+
+def _alpaca_config_for_data_folder(data_folder):
+    env_path = Path(data_folder).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        env_path = Path.cwd() / ".env"
+    return _alpaca_config(env_path)
+
+
+def _submit_candidate_symbols(latest_dir):
+    intents_path = Path(latest_dir) / "order_intents.csv"
+    if not intents_path.exists():
+        return []
+    try:
+        intents = pd.read_csv(intents_path)
+    except Exception:
+        return []
+    if intents.empty or "symbol" not in intents:
+        return []
+    return sorted({str(value).strip().upper() for value in intents["symbol"].dropna().tolist() if str(value).strip()})
+
+
+def run_broker_cutover_readiness(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    broker_snapshot = _read_alpaca_paper_snapshot_for_data_folder(data_folder)
+    result = write_broker_cutover_readiness(latest_dir, broker_snapshot=broker_snapshot)
+    summary = result.get("summary", {})
+    print(f"Broker cutover readiness: {latest_dir / 'broker_cutover_readiness.md'}")
+    print(f"Broker cutover readiness csv: {latest_dir / 'broker_cutover_readiness.csv'}")
+    print(f"Broker cutover readiness json: {latest_dir / 'broker_cutover_readiness.json'}")
+    print(f"cutover_readiness_status: {summary.get('cutover_readiness_status', '')}")
+    print(f"local_broker_gap_status: {summary.get('local_broker_gap_status', '')}")
+    print(f"broker_cutover_enabled: {str(bool(summary.get('broker_cutover_enabled', False))).lower()}")
+    print(f"submit_order_called: {str(bool(summary.get('submit_order_called', False))).lower()}")
+    print(f"post_request_used: {str(bool(summary.get('post_request_used', False))).lower()}")
+    return result
+
+
+def run_alpaca_paper_submit_readiness(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    api_key, secret_key, base_url = _alpaca_config_for_data_folder(data_folder)
+    broker_snapshot = read_alpaca_paper_snapshot(
+        api_key=api_key,
+        secret_key=secret_key,
+        base_url=base_url,
+        broker_submit_enabled=False,
+        live_trading_enabled=False,
+    )
+    symbols = _submit_candidate_symbols(latest_dir)
+    assets_result = read_alpaca_paper_assets(api_key=api_key, secret_key=secret_key, base_url=base_url, symbols=symbols) if symbols else {"assets": {}, "metadata": {"alpaca_assets_read_success": True, "request_methods_used": "none"}}
+    result = write_alpaca_paper_submit_readiness(
+        latest_dir,
+        broker_snapshot=broker_snapshot,
+        base_url=base_url,
+        assets=assets_result.get("assets", {}),
+        assets_metadata=assets_result.get("metadata", {}),
+    )
+    summary = result.get("summary", {})
+    print(f"Alpaca paper submit readiness: {latest_dir / 'alpaca_paper_submit_readiness.md'}")
+    print(f"Alpaca paper submit readiness csv: {latest_dir / 'alpaca_paper_submit_readiness.csv'}")
+    print(f"Alpaca paper submit readiness json: {latest_dir / 'alpaca_paper_submit_readiness.json'}")
+    print(f"submit_readiness_status: {summary.get('submit_readiness_status', '')}")
+    print(f"submit_candidate_count: {summary.get('submit_candidate_count', '')}")
+    print(f"broker_submit_enabled: {str(bool(summary.get('broker_submit_enabled', False))).lower()}")
+    print(f"submit_order_called: {str(bool(summary.get('submit_order_called', False))).lower()}")
+    print(f"post_request_used: {str(bool(summary.get('post_request_used', False))).lower()}")
+    return result
+
+
+def run_alpaca_paper_submit_one(
+    data_folder="hisseler",
+    report_output_dir="reports",
+    *,
+    confirm_token=None,
+    broker_submit_enabled=False,
+    live_trading_enabled=False,
+    short_trading_enabled=False,
+):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    api_key, secret_key, base_url = _alpaca_config_for_data_folder(data_folder)
+    broker_snapshot = read_alpaca_paper_snapshot(
+        api_key=api_key,
+        secret_key=secret_key,
+        base_url=base_url,
+        broker_submit_enabled=False,
+        live_trading_enabled=False,
+    )
+    symbols = _submit_candidate_symbols(latest_dir)
+    assets_result = read_alpaca_paper_assets(api_key=api_key, secret_key=secret_key, base_url=base_url, symbols=symbols) if symbols else {"assets": {}, "metadata": {"alpaca_assets_read_success": True, "request_methods_used": "none"}}
+    result = write_alpaca_paper_submit_one(
+        latest_dir,
+        broker_snapshot=broker_snapshot,
+        base_url=base_url,
+        assets=assets_result.get("assets", {}),
+        assets_metadata=assets_result.get("metadata", {}),
+        broker_submit_enabled=broker_submit_enabled,
+        confirm_token=confirm_token,
+        live_trading_enabled=live_trading_enabled,
+        short_trading_enabled=short_trading_enabled,
+        api_key=api_key,
+        secret_key=secret_key,
+    )
+    summary = result.get("summary", {})
+    print(f"Alpaca paper submit one audit: {latest_dir / 'alpaca_paper_submit_one_audit.md'}")
+    print(f"Alpaca paper submit one json: {latest_dir / 'alpaca_paper_submit_one_audit.json'}")
+    print(f"alpaca_paper_submit_one_status: {summary.get('alpaca_paper_submit_one_status', '')}")
+    print(f"submit_gate_status: {summary.get('submit_gate_status', '')}")
+    print(f"submit_candidate_count: {summary.get('submit_candidate_count', '')}")
+    print(f"broker_submit_enabled: {str(bool(summary.get('broker_submit_enabled', False))).lower()}")
+    print(f"submit_order_called: {str(bool(summary.get('submit_order_called', False))).lower()}")
+    print(f"post_request_used: {str(bool(summary.get('post_request_used', False))).lower()}")
+    print(f"live_trading_enabled: {str(bool(summary.get('live_trading_enabled', False))).lower()}")
+    print(f"short_trading_enabled: {str(bool(summary.get('short_trading_enabled', False))).lower()}")
+    return result
+
+
+def run_create_broker_cutover_baseline(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    broker_snapshot = _read_alpaca_paper_snapshot_for_data_folder(data_folder)
+    result = create_broker_cutover_baseline(latest_dir, broker_snapshot=broker_snapshot)
+    summary = result.get("summary", {})
+    print(f"Broker cutover baseline: {latest_dir / 'broker_cutover_baseline.json'}")
+    print(f"baseline_created: {str(bool(result.get('created', False))).lower()}")
+    print(f"baseline_reason: {result.get('reason', '')}")
+    print(f"alpaca_snapshot_status: {summary.get('alpaca_snapshot_status', '')}")
+    print(f"local_broker_gap_status: {summary.get('local_broker_gap_status', '')}")
+    print(f"broker_cutover_enabled: {str(bool(summary.get('broker_cutover_enabled', False))).lower()}")
+    print(f"submit_order_called: {str(bool(summary.get('submit_order_called', False))).lower()}")
+    print(f"post_request_used: {str(bool(summary.get('post_request_used', False))).lower()}")
     return result
 
 

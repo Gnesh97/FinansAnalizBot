@@ -3,13 +3,13 @@ try:
     import sys
     from pathlib import Path
 
-    from .runner import run_alpaca_paper_check, run_broker_reconciliation, run_closed_trade_report, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
+    from .runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 except ImportError:
     import argparse
     import sys
     from pathlib import Path
 
-    from runner import run_alpaca_paper_check, run_broker_reconciliation, run_closed_trade_report, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
+    from runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 
 
 VALIDATION_EXPERIMENTS = [
@@ -229,6 +229,26 @@ if __name__ == "__main__":
         help="GET-only Alpaca paper account/positions/orders check plus dry-run preview; never submits orders.",
     )
     parser.add_argument(
+        "--alpaca-paper-submit-readiness",
+        action="store_true",
+        help="Write doc-gated Alpaca paper submit readiness report; GET-only and never submits orders.",
+    )
+    parser.add_argument(
+        "--alpaca-paper-submit-one",
+        action="store_true",
+        help="Run one-order gated Alpaca paper submit path; blocks by default unless explicit enable and confirm token pass.",
+    )
+    parser.add_argument(
+        "--alpaca-paper-submit-confirm-token",
+        default="",
+        help="Required token for --alpaca-paper-submit-one. Do not use unless intentionally submitting one paper order.",
+    )
+    parser.add_argument(
+        "--broker-submit-enabled",
+        action="store_true",
+        help="Explicitly enable broker submit gate for --alpaca-paper-submit-one; default remains disabled.",
+    )
+    parser.add_argument(
         "--execution-preview",
         action="store_true",
         help="Build local execution preview artifacts from accepted pending orders; never submits orders.",
@@ -264,6 +284,11 @@ if __name__ == "__main__":
         help="Write report-only local paper decision inbox from existing latest reports; no state mutation.",
     )
     parser.add_argument(
+        "--apply-paper-order-review-decisions",
+        action="store_true",
+        help="Apply paper_order_review.csv decisions into paper_pending_orders.csv; no fills or broker orders.",
+    )
+    parser.add_argument(
         "--paper-risk-dashboard",
         action="store_true",
         help="Write report-only local paper portfolio risk dashboard from existing latest reports; no state mutation.",
@@ -294,6 +319,16 @@ if __name__ == "__main__":
         help="Write report-only local-vs-broker reconciliation skeleton; no broker submit or POST.",
     )
     parser.add_argument(
+        "--broker-cutover-readiness",
+        action="store_true",
+        help="Write forward-only Alpaca paper cutover readiness report; no broker submit or POST.",
+    )
+    parser.add_argument(
+        "--create-broker-cutover-baseline",
+        action="store_true",
+        help="Explicitly create forward-only Alpaca paper cutover baseline JSON after GET-only snapshot PASS.",
+    )
+    parser.add_argument(
         "--alpaca-paper-snapshot-readonly",
         action="store_true",
         help="Use explicit GET-only Alpaca paper snapshot for broker reconciliation; disabled by default.",
@@ -305,6 +340,16 @@ if __name__ == "__main__":
         run_alpaca_paper_check(
             str(data_folder),
             make_chatgpt_report=args.make_chatgpt_report,
+        )
+        raise SystemExit(0)
+    if args.alpaca_paper_submit_readiness:
+        run_alpaca_paper_submit_readiness(str(data_folder))
+        raise SystemExit(0)
+    if args.alpaca_paper_submit_one:
+        run_alpaca_paper_submit_one(
+            str(data_folder),
+            confirm_token=args.alpaca_paper_submit_confirm_token,
+            broker_submit_enabled=args.broker_submit_enabled,
         )
         raise SystemExit(0)
     if args.execution_preview or args.pre_submit_check:
@@ -336,6 +381,9 @@ if __name__ == "__main__":
     if args.paper_decision_inbox:
         run_paper_decision_inbox(str(data_folder))
         raise SystemExit(0)
+    if args.apply_paper_order_review_decisions:
+        run_apply_paper_order_review_decisions(str(data_folder))
+        raise SystemExit(0)
     if args.paper_risk_dashboard:
         run_paper_risk_dashboard(str(data_folder))
         raise SystemExit(0)
@@ -353,6 +401,12 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if args.broker_reconciliation:
         run_broker_reconciliation(str(data_folder), alpaca_paper_snapshot_readonly=args.alpaca_paper_snapshot_readonly)
+        raise SystemExit(0)
+    if args.broker_cutover_readiness:
+        run_broker_cutover_readiness(str(data_folder))
+        raise SystemExit(0)
+    if args.create_broker_cutover_baseline:
+        run_create_broker_cutover_baseline(str(data_folder))
         raise SystemExit(0)
     run_strategy_experiments(
         str(data_folder),

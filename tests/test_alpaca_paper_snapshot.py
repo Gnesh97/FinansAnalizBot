@@ -1,8 +1,10 @@
 import json
+import socket
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import urllib.error
 
 import pandas as pd
 
@@ -15,8 +17,8 @@ FIXTURE_STRATEGY = "fixture_strategy"
 
 
 class FakeResponse:
-    def __init__(self, payload):
-        self.payload = json.dumps(payload).encode("utf-8")
+    def __init__(self, payload, raw=None):
+        self.payload = raw if raw is not None else json.dumps(payload).encode("utf-8")
 
     def __enter__(self):
         return self
@@ -29,22 +31,26 @@ class FakeResponse:
 
 
 class FakeUrlopen:
-    def __init__(self, payloads=None, fail=False):
+    def __init__(self, payloads=None, fail=False, exception=None, raw_payloads=None):
         self.payloads = payloads or {}
+        self.raw_payloads = raw_payloads or {}
         self.fail = fail
+        self.exception = exception
         self.requests = []
 
     def __call__(self, req, timeout=20):
         self.requests.append(req)
+        if self.exception:
+            raise self.exception
         if self.fail:
             raise OSError("fixture read failed")
         url = req.full_url
         if "/v2/account" in url:
-            return FakeResponse(self.payloads.get("account", {"status": "ACTIVE"}))
+            return FakeResponse(self.payloads.get("account", {"status": "ACTIVE"}), self.raw_payloads.get("account"))
         if "/v2/positions" in url:
-            return FakeResponse(self.payloads.get("positions", []))
+            return FakeResponse(self.payloads.get("positions", []), self.raw_payloads.get("positions"))
         if "/v2/orders" in url:
-            return FakeResponse(self.payloads.get("orders", []))
+            return FakeResponse(self.payloads.get("orders", []), self.raw_payloads.get("orders"))
         raise AssertionError(url)
 
 
@@ -138,7 +144,63 @@ class AlpacaPaperSnapshotTest(unittest.TestCase):
 
         self.assertEqual(snapshot.metadata["alpaca_snapshot_status"], "NOT_AVAILABLE")
         self.assertEqual(snapshot.metadata["alpaca_snapshot_reason"], "missing_credentials")
+        self.assertEqual(snapshot.metadata["alpaca_failure_category"], "MISSING_CREDENTIALS")
         self.assertEqual(opener.requests, [])
+
+    def test_auth_failure_reports_sanitized_category(self):
+        opener = FakeUrlopen(exception=urllib.error.HTTPError("https://paper-api.alpaca.markets/v2/account", 401, "Unauthorized fixture secret", {}, None))
+
+        snapshot = AlpacaPaperSnapshotClient(
+            api_key="fixture-key",
+            secret_key="fixture-secret",
+            base_url="https://paper-api.alpaca.markets",
+            urlopen=opener,
+        ).read_snapshot()
+
+        self.assertEqual(snapshot.metadata["alpaca_snapshot_status"], "NOT_AVAILABLE")
+        self.assertEqual(snapshot.metadata["alpaca_failure_category"], "AUTH_FAILED")
+        self.assertEqual(snapshot.metadata["alpaca_failure_endpoint"], "/v2/account")
+        self.assertEqual(snapshot.metadata["request_methods_used"], "GET")
+        self.assertNotIn("fixture-secret", json.dumps(snapshot.metadata))
+
+    def test_network_failure_reports_network_error(self):
+        opener = FakeUrlopen(exception=urllib.error.URLError("temporary dns failure"))
+
+        snapshot = AlpacaPaperSnapshotClient(
+            api_key="fixture-key",
+            secret_key="fixture-secret",
+            base_url="https://paper-api.alpaca.markets",
+            urlopen=opener,
+        ).read_snapshot()
+
+        self.assertEqual(snapshot.metadata["alpaca_failure_category"], "NETWORK_ERROR")
+        self.assertEqual(snapshot.metadata["alpaca_snapshot_reason"], "NETWORK_ERROR")
+
+    def test_timeout_reports_timeout(self):
+        opener = FakeUrlopen(exception=socket.timeout("timed out"))
+
+        snapshot = AlpacaPaperSnapshotClient(
+            api_key="fixture-key",
+            secret_key="fixture-secret",
+            base_url="https://paper-api.alpaca.markets",
+            urlopen=opener,
+        ).read_snapshot()
+
+        self.assertEqual(snapshot.metadata["alpaca_failure_category"], "TIMEOUT")
+        self.assertEqual(snapshot.metadata["alpaca_snapshot_reason"], "TIMEOUT")
+
+    def test_parse_failure_reports_parse_error(self):
+        opener = FakeUrlopen(raw_payloads={"account": b"not-json"})
+
+        snapshot = AlpacaPaperSnapshotClient(
+            api_key="fixture-key",
+            secret_key="fixture-secret",
+            base_url="https://paper-api.alpaca.markets",
+            urlopen=opener,
+        ).read_snapshot()
+
+        self.assertEqual(snapshot.metadata["alpaca_failure_category"], "PARSE_ERROR")
+        self.assertEqual(snapshot.metadata["alpaca_failure_detail"], "invalid_json")
 
     def test_read_failed_is_warning_not_empty_broker_mismatch_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -173,6 +235,7 @@ class AlpacaPaperSnapshotTest(unittest.TestCase):
         ).read_snapshot()
 
         self.assertEqual(snapshot.metadata["alpaca_snapshot_status"], "FAIL")
+        self.assertEqual(snapshot.metadata["alpaca_failure_category"], "LIVE_ENDPOINT_BLOCKED")
         self.assertTrue(snapshot.metadata["alpaca_live_endpoint_blocked"])
         self.assertEqual(opener.requests, [])
 
