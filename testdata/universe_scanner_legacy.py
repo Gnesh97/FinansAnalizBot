@@ -3220,6 +3220,7 @@ def _run_portfolio_period(
     commission_rate=0.001,
     slippage_mu=0.05,
     risk_off_exit_mode="hold_existing",
+    min_dollar_volume=0.0,
 ):
     period_data = _slice_asset_data_for_period(
         asset_data,
@@ -3248,6 +3249,7 @@ def _run_portfolio_period(
             commission_rate=commission_rate,
             slippage_mu=slippage_mu,
             risk_off_exit_mode=risk_off_exit_mode,
+            min_dollar_volume=min_dollar_volume,
         )
         metrics = manager.run_backtest()
     else:
@@ -3269,6 +3271,7 @@ def _run_portfolio_period(
                 commission_rate=commission_rate,
                 slippage_mu=slippage_mu,
                 risk_off_exit_mode=risk_off_exit_mode,
+                min_dollar_volume=min_dollar_volume,
             )
         with timing.stage("PortfolioManager run_backtest", period_name):
             metrics = manager.run_backtest()
@@ -4771,6 +4774,7 @@ def run_universe_scanner(
     commission_rate=0.001,
     slippage_mu=0.05,
     risk_off_exit_mode="hold_existing",
+    min_dollar_volume=0.0,
 ):
     run_profile = str(run_profile).lower()
     if run_profile not in {"fast", "full"}:
@@ -4930,6 +4934,9 @@ def run_universe_scanner(
         raise ValueError("commission_rate negatif olamaz.")
     if slippage_mu < 0:
         raise ValueError("slippage_mu negatif olamaz.")
+    min_dollar_volume = float(min_dollar_volume)
+    if min_dollar_volume < 0:
+        raise ValueError("min_dollar_volume negatif olamaz.")
     risk_off_exit_mode = _normalize_risk_off_exit_mode(risk_off_exit_mode)
     ranking_mode = _normalize_ranking_mode(ranking_mode)
     execution_mode = _normalize_execution_mode(execution_mode)
@@ -6193,6 +6200,7 @@ def run_universe_scanner(
             commission_rate=commission_rate,
             slippage_mu=slippage_mu,
             risk_off_exit_mode=risk_off_exit_mode,
+            min_dollar_volume=min_dollar_volume,
         )
         test_manager, test_metrics = _run_portfolio_period(
             asset_data,
@@ -6209,6 +6217,7 @@ def run_universe_scanner(
             commission_rate=commission_rate,
             slippage_mu=slippage_mu,
             risk_off_exit_mode=risk_off_exit_mode,
+            min_dollar_volume=min_dollar_volume,
         )
         report_rows = [metrics for metrics in [train_metrics, test_metrics] if metrics]
         if not report_rows:
@@ -6320,6 +6329,7 @@ def run_universe_scanner(
                 commission_rate=commission_rate,
                 slippage_mu=slippage_mu,
                 risk_off_exit_mode=risk_off_exit_mode,
+                min_dollar_volume=min_dollar_volume,
             )
             if not test_metrics:
                 continue
@@ -6485,6 +6495,7 @@ def run_universe_scanner(
                 commission_rate=commission_rate,
                 slippage_mu=slippage_mu,
                 risk_off_exit_mode=risk_off_exit_mode,
+                min_dollar_volume=min_dollar_volume,
             )
         with timing.stage("PortfolioManager run_backtest", "single"):
             metrics = manager.run_backtest()
@@ -6962,6 +6973,7 @@ EXPERIMENT_PARAM_COLUMNS = [
     "time_stop_bars",
     "commission_rate",
     "slippage_mu",
+    "min_dollar_volume",
     "risk_off_exit_mode",
     "use_entry_context_filter",
     "max_entry_gap_pct",
@@ -7172,6 +7184,7 @@ def _experiment_effective_params(
     quick_mode,
     commission_rate=0.001,
     slippage_mu=0.05,
+    min_dollar_volume=0.0,
     risk_off_exit_mode="hold_existing",
     max_workers=None,
     worker_utilization_target=0.85,
@@ -7254,6 +7267,7 @@ def _experiment_effective_params(
         "commission_rate": commission_rate,
         "slippage_mu": slippage_mu,
         "risk_off_exit_mode": risk_off_exit_mode,
+        "min_dollar_volume": min_dollar_volume,
         "fast_backtest": True,
         "execution_mode": "bar_close",
         "evaluation_mode": "single",
@@ -7359,10 +7373,13 @@ def _experiment_effective_params(
     params["exit_mode"] = _normalize_exit_mode(params["exit_mode"])
     params["commission_rate"] = float(params["commission_rate"])
     params["slippage_mu"] = float(params["slippage_mu"])
+    params["min_dollar_volume"] = float(params.get("min_dollar_volume", 0.0))
     if params["commission_rate"] < 0:
         raise ValueError("commission_rate negatif olamaz.")
     if params["slippage_mu"] < 0:
         raise ValueError("slippage_mu negatif olamaz.")
+    if params["min_dollar_volume"] < 0:
+        raise ValueError("min_dollar_volume negatif olamaz.")
     params["risk_off_exit_mode"] = _normalize_risk_off_exit_mode(
         params["risk_off_exit_mode"]
     )
@@ -8134,6 +8151,7 @@ def _run_prepared_portfolio_experiment(
     commission_rate = params.get("commission_rate", 0.001)
     slippage_mu = params.get("slippage_mu", 0.05)
     risk_off_exit_mode = params.get("risk_off_exit_mode", "hold_existing")
+    min_dollar_volume = params.get("min_dollar_volume", 0.0)
 
     if evaluation_mode == "split":
         rows = []
@@ -8156,6 +8174,7 @@ def _run_prepared_portfolio_experiment(
                 commission_rate=commission_rate,
                 slippage_mu=slippage_mu,
                 risk_off_exit_mode=risk_off_exit_mode,
+                min_dollar_volume=min_dollar_volume,
             )
             if metrics:
                 metrics["Makro Rejimde Reddedilen Sinyal"] = (
@@ -8188,6 +8207,7 @@ def _run_prepared_portfolio_experiment(
                 commission_rate=commission_rate,
                 slippage_mu=slippage_mu,
                 risk_off_exit_mode=risk_off_exit_mode,
+                min_dollar_volume=min_dollar_volume,
             )
             if metrics:
                 rows.append(
@@ -8224,6 +8244,7 @@ def _run_prepared_portfolio_experiment(
         commission_rate=commission_rate,
         slippage_mu=slippage_mu,
         risk_off_exit_mode=risk_off_exit_mode,
+        min_dollar_volume=min_dollar_volume,
     )
     metrics = manager.run_backtest()
     if not metrics:
@@ -8308,6 +8329,7 @@ def run_strategy_experiments(
     reuse_prepared_data=True,
     commission_rate=0.001,
     slippage_mu=0.05,
+    min_dollar_volume=0.0,
     risk_off_exit_mode="hold_existing",
     max_workers=None,
     worker_utilization_target=0.85,
@@ -8356,6 +8378,7 @@ def run_strategy_experiments(
             quick_mode,
             commission_rate=commission_rate,
             slippage_mu=slippage_mu,
+            min_dollar_volume=min_dollar_volume,
             risk_off_exit_mode=risk_off_exit_mode,
             max_workers=max_workers,
             worker_utilization_target=worker_utilization_target,
@@ -8426,6 +8449,7 @@ def run_strategy_experiments(
         scanner_kwargs.setdefault("strategy_name", params["strategy_name"])
         scanner_kwargs.setdefault("commission_rate", params["commission_rate"])
         scanner_kwargs.setdefault("slippage_mu", params["slippage_mu"])
+        scanner_kwargs.setdefault("min_dollar_volume", params["min_dollar_volume"])
         scanner_kwargs.setdefault("risk_off_exit_mode", params["risk_off_exit_mode"])
         scanner_kwargs.setdefault("max_workers", params["max_workers"])
         scanner_kwargs.setdefault(

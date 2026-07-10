@@ -42,6 +42,7 @@ PORTFOLIO_CONTEXT_SOURCE_COLUMNS = [
     "Entry_BB_Distance_ATR",
     "Entry_Signal_Range_Pct",
     "Entry_Signal_Close_Position_In_Range",
+    "Avg_Dollar_Volume",
 ]
 PORTFOLIO_REQUIRED_COLUMNS = list(
     dict.fromkeys(PORTFOLIO_CORE_REQUIRED_COLUMNS + PORTFOLIO_CONTEXT_SOURCE_COLUMNS)
@@ -67,6 +68,7 @@ PORTFOLIO_CONTEXT_SIGNAL_COLUMNS = [
     "Signal_Macro_Uptrend",
     "Signal_Entry_Context_Filter_OK",
     "Signal_Entry_Context_Rejected_Reason",
+    "Signal_Avg_Dollar_Volume",
 ]
 
 TRADE_CONTEXT_REPORT_COLUMNS = [
@@ -111,6 +113,7 @@ PORTFOLIO_REJECTION_COLUMNS = [
     "Rejected Missing Target Distance",
     "Rejected Missing Ranking Score",
     "Rejected Risk Off",
+    "Rejected Liquidity Dollar Volume",
     "Rejected Max Positions",
     "Rejected Invalid Risk Per Share",
     "Rejected Insufficient Cash",
@@ -235,6 +238,7 @@ class PortfolioManager:
         commission_rate=0.001,
         slippage_mu=0.05,
         risk_off_exit_mode="hold_existing",
+        min_dollar_volume=0.0,
     ):
         self.asset_data = asset_data
         self.intraday_data = intraday_data or {}
@@ -253,6 +257,9 @@ class PortfolioManager:
         if self.slippage_mu < 0:
             raise ValueError("slippage_mu negatif olamaz.")
         self.risk_off_exit_mode = _normalize_risk_off_exit_mode(risk_off_exit_mode)
+        self.min_dollar_volume = float(min_dollar_volume or 0.0)
+        if self.min_dollar_volume < 0:
+            raise ValueError("min_dollar_volume negatif olamaz.")
         self.portfolio_fast_arrays_build_seconds = 0.0
         self.portfolio_loop_seconds = 0.0
         self.target_enabled = self.exit_mode in {
@@ -270,6 +277,7 @@ class PortfolioManager:
         self.rejected_signals = 0
         self.macro_rejected_signals = 0
         self.rejection_diagnostics = self._empty_rejection_diagnostics()
+        self.liquidity_skipped_entries = []
         self._warned_missing_trade_context_columns = set()
         self.max_open_observed = 0
         self.max_heat_observed = 0.0
@@ -318,11 +326,11 @@ class PortfolioManager:
                 else:
                     self._warn_trade_context_missing(column)
                     frame[column] = np.nan
-            frame["ENTRY_ORDER"] = frame["ENTRY_SIGNAL"].shift(1).fillna(False)
-            frame["EXIT_ORDER"] = frame["EXIT_SIGNAL"].shift(1).fillna(False)
+            frame["ENTRY_ORDER"] = frame["ENTRY_SIGNAL"].shift(1).eq(True)
+            frame["EXIT_ORDER"] = frame["EXIT_SIGNAL"].shift(1).eq(True)
             frame["Signal_Time"] = pd.Series(frame.index, index=frame.index).shift(1)
             frame["Signal_SMA20_Reversion_Exit"] = (
-                frame["SMA20_Reversion_Exit"].shift(1).fillna(False)
+                frame["SMA20_Reversion_Exit"].shift(1).eq(True)
             )
             frame["Signal_Hurst"] = frame["Hurst_Exponent"].shift(1)
             frame["Signal_Momentum"] = frame["Momentum_Factor"].shift(1)
@@ -359,6 +367,7 @@ class PortfolioManager:
             frame["Signal_Entry_Context_Rejected_Reason"] = (
                 frame["Entry_Context_Rejected_Reason"].shift(1)
             )
+            frame["Signal_Avg_Dollar_Volume"] = frame["Avg_Dollar_Volume"].shift(1)
             prepared[symbol] = frame[
                 [
                     "Open",
@@ -646,6 +655,39 @@ class PortfolioManager:
             self.rejection_diagnostics[reason] = 0
         self.rejection_diagnostics[reason] += int(count)
 
+    def _liquidity_rejection_reason(self, avg_dollar_volume):
+        if self.min_dollar_volume <= 0:
+            return None
+        observed = self._finite_or_nan(avg_dollar_volume)
+        if pd.isna(observed):
+            return "missing_avg_dollar_volume"
+        if observed <= 0:
+            return "zero_avg_dollar_volume"
+        if observed < self.min_dollar_volume:
+            return "below_min_dollar_volume"
+        return None
+
+    def _record_liquidity_skip(
+        self,
+        symbol,
+        timestamp,
+        signal_time,
+        avg_dollar_volume,
+        reason,
+    ):
+        self._reject_candidate("Rejected Liquidity Dollar Volume")
+        observed = self._finite_or_nan(avg_dollar_volume)
+        self.liquidity_skipped_entries.append(
+            {
+                "Symbol": symbol,
+                "Entry Time": timestamp,
+                "Signal Time": signal_time,
+                "Observed Avg Dollar Volume": observed,
+                "Min Dollar Volume": self.min_dollar_volume,
+                "Reason": reason,
+            }
+        )
+
     def _candidate_from_signal_values(
         self,
         symbol,
@@ -659,6 +701,7 @@ class PortfolioManager:
         atr_value,
         target_distance,
         context=None,
+        timestamp=None,
     ):
         if pd.isna(entry_order) or not bool(entry_order):
             return None
@@ -676,6 +719,18 @@ class PortfolioManager:
             return None
         if self.target_enabled and pd.isna(target_distance):
             self._reject_candidate("Rejected Missing Target Distance")
+            return None
+
+        avg_dollar_volume = (context or {}).get("Signal_Avg_Dollar_Volume")
+        liquidity_reason = self._liquidity_rejection_reason(avg_dollar_volume)
+        if liquidity_reason is not None:
+            self._record_liquidity_skip(
+                symbol,
+                timestamp,
+                signal_time,
+                avg_dollar_volume,
+                liquidity_reason,
+            )
             return None
 
         hurst_value = self._finite_or_nan(hurst)
@@ -940,6 +995,7 @@ class PortfolioManager:
         self.rejected_signals = 0
         self.macro_rejected_signals = 0
         self.rejection_diagnostics = self._empty_rejection_diagnostics()
+        self.liquidity_skipped_entries = []
         self.max_open_observed = 0
         self.max_heat_observed = 0.0
 
@@ -1080,6 +1136,7 @@ class PortfolioManager:
                         atr_value,
                         target_distance,
                         context=context,
+                        timestamp=timestamp,
                     )
                     if candidate is not None:
                         candidates.append(candidate)
@@ -1286,6 +1343,7 @@ class PortfolioManager:
                         atr_value,
                         target_distance,
                         context=context,
+                        timestamp=timestamp,
                     )
                     if candidate is not None:
                         candidates.append(candidate)
@@ -1467,6 +1525,18 @@ class PortfolioManager:
             "Max Portfolio Heat (%)": round(self.max_heat_observed * 100, 2),
             "Reddedilen Sinyal": self.rejected_signals,
             "Makro Rejimde Reddedilen Sinyal": self.macro_rejected_signals,
+            "Dynamic Liquidity Filter Enabled": self.min_dollar_volume > 0,
+            "Dynamic Liquidity Min Dollar Volume": self.min_dollar_volume,
+            "Liquidity Skipped Entry Count": len(self.liquidity_skipped_entries),
+            "Liquidity Skipped Symbols": ",".join(
+                sorted(
+                    {
+                        str(row["Symbol"])
+                        for row in self.liquidity_skipped_entries
+                        if row.get("Symbol")
+                    }
+                )
+            ),
         }
         metrics.update(self.rejection_diagnostics)
         return metrics

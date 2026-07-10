@@ -16,6 +16,13 @@ SURVIVORSHIP_BIAS_WARNING = (
     "doğrulanmalıdır."
 )
 
+SURVIVORSHIP_BIAS_BANNER = """> [!WARNING]
+> **RESEARCH-ONLY BACKTEST WARNING (SURVIVORSHIP BIAS)**
+> - **Universe**: This backtest uses a **static, current-only constituent list** (surviving tickers currently active as of the data pull date).
+> - **Survivorship Bias is Severe**: Delisted, bankrupt, merged, acquired, and removed index constituents are completely excluded.
+> - **Research-Only**: Absolute returns, drawdowns, win rates, and other strategy performance metrics are **research-only estimates** and are highly likely to be inflated.
+> - **Not Investable**: These results do **not** represent live-trading evidence or investable performance."""
+
 DIVIDEND_ADJUSTMENT_WARNING = (
     "Fiyat datası adjusted değilse uzun dönem testlerde özellikle temettü "
     "veren hisselerde sonuçlar sapabilir. Adjusted OHLC data kullanımı önerilir."
@@ -202,6 +209,8 @@ def _write_compact_markdown(report, markdown_path, allowed_symbols, generated_at
     content = [
         "# Strategy Compact Report",
         "",
+        SURVIVORSHIP_BIAS_BANNER,
+        "",
         f"- Run tarihi/saat: {generated_at}",
         f"- Kullanilan sembol sayisi: {len(allowed_symbols) if allowed_symbols else 'All'}",
         f"- Kullanilan semboller: {symbol_text}",
@@ -243,6 +252,7 @@ __all__ = [
     "calculate_equal_weight_benchmark",
     "COMPACT_SCORE_COLUMNS",
     "SURVIVORSHIP_BIAS_WARNING",
+    "SURVIVORSHIP_BIAS_BANNER",
     "DIVIDEND_ADJUSTMENT_WARNING",
     "_prefixed_benchmark_metrics",
     "_numeric_series",
