@@ -2,6 +2,10 @@
 
 Research, backtest, local paper-trading cockpit, and broker-readiness tooling for a CSV-first trading workflow. This project is not production live-trading software.
 
+## Current Project Status
+
+Research-only; not live-trading ready. Current strategy results are not investable evidence while survivorship bias remains unresolved. See [PROJECT_STATUS.md](PROJECT_STATUS.md).
+
 ## Safety Defaults
 
 - Live trading is disabled.
