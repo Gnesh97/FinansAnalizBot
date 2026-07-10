@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -7,8 +8,10 @@ import pandas as pd
 from testdata.broker_reconciliation import (
     ReadOnlyBrokerSnapshot,
     build_broker_reconciliation,
+    build_forward_broker_reconciliation,
     write_broker_reconciliation,
 )
+from testdata.broker_ledger import append_order_to_ledger
 from testdata.execution_costs import build_execution_cost_preview
 from testdata.execution_engine import build_order_intents
 from testdata.no_lookahead_audit import build_no_lookahead_audit
@@ -79,6 +82,69 @@ def _snapshot(*, positions=None, orders=None, fills=None, live=False):
 
 
 class BrokerReconciliationTest(unittest.TestCase):
+    def _baseline(self, latest, positions=None):
+        (latest / "broker_cutover_baseline.json").write_text(
+            json.dumps({"forward_only": True, "broker_baseline_positions": positions or []}),
+            encoding="utf-8",
+        )
+
+    def _ledger(self, latest, client_id, broker_id, symbol, side, status, qty, filled_qty):
+        append_order_to_ledger(
+            latest, client_order_id=client_id, broker_order_id=broker_id, symbol=symbol,
+            side=side, notional=100.0, qty=qty, status=status, readback_status="PASS",
+            broker_position_match=False, filled_qty=filled_qty,
+        )
+
+    def test_forward_reconciliation_matches_same_symbol_orders_by_identifier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp) / "reports" / "latest"; latest.mkdir(parents=True)
+            self._baseline(latest)
+            self._ledger(latest, "test-client-001", "test-broker-001", "TEST", "buy", "FILLED", 1.25, 1.25)
+            self._ledger(latest, "test-client-002", "test-broker-002", "TEST", "buy", "ACCEPTED/NEW", 2.0, 0.0)
+            snapshot = _snapshot(positions=[{"symbol": "TEST", "qty": 1.25}], orders=[{"id": "test-broker-002", "client_order_id": "test-client-002", "symbol": "TEST", "side": "buy", "qty": 2.0, "status": "accepted"}], fills=[])
+
+            result = build_forward_broker_reconciliation(latest, snapshot)
+
+            self.assertEqual(result["summary"]["reconciliation_status"], "PASS")
+            self.assertEqual(result["summary"]["ledger_only_order_count"], 0)
+
+    def test_forward_reconciliation_nets_buy_sell_and_partial_cancel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp) / "reports" / "latest"; latest.mkdir(parents=True)
+            self._baseline(latest, [{"symbol": "TEST", "qty": 5.0}])
+            self._ledger(latest, "test-client-003", "test-broker-003", "TEST", "buy", "FILLED", 2.0, 2.0)
+            self._ledger(latest, "test-client-004", "test-broker-004", "TEST", "sell", "CANCELED", 3.0, 1.5)
+            snapshot = _snapshot(positions=[{"symbol": "TEST", "qty": 5.5}], orders=[], fills=[])
+
+            result = build_forward_broker_reconciliation(latest, snapshot)
+
+            self.assertEqual(result["summary"]["reconciliation_status"], "PASS")
+
+    def test_pre_cutover_positions_excluded_and_missing_baseline_warns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp) / "reports" / "latest"; latest.mkdir(parents=True)
+            snapshot = _snapshot(positions=[{"symbol": "HIST", "qty": 4.0}], orders=[], fills=[])
+
+            missing = build_forward_broker_reconciliation(latest, snapshot)
+            self._baseline(latest, [{"symbol": "HIST", "qty": 4.0}])
+            bound = build_forward_broker_reconciliation(latest, snapshot)
+
+            self.assertEqual(missing["summary"]["reconciliation_status"], "WARNING")
+            self.assertEqual(bound["summary"]["reconciliation_status"], "PASS")
+
+    def test_forward_reconciliation_reports_broker_only_and_preserves_ledger_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp) / "reports" / "latest"; latest.mkdir(parents=True)
+            self._baseline(latest)
+            self._ledger(latest, "test-client-005", "test-broker-005", "TEST", "buy", "ACCEPTED/NEW", 1.0, 0.0)
+            durable = Path(tmp) / "state" / "broker_order_ledger.csv"; before = durable.read_bytes()
+            snapshot = _snapshot(orders=[{"id": "broker-only-006", "client_order_id": "client-only-006", "symbol": "TEST", "side": "buy", "qty": 1.0, "status": "new"}], fills=[])
+
+            result = build_forward_broker_reconciliation(latest, snapshot)
+
+            self.assertEqual(result["summary"]["reconciliation_status"], "FAIL")
+            self.assertGreater(result["summary"]["broker_only_order_count"], 0)
+            self.assertEqual(durable.read_bytes(), before)
     def test_no_broker_snapshot_warns_without_crash(self):
         with tempfile.TemporaryDirectory() as tmp:
             latest = Path(tmp)

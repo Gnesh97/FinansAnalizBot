@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
+import tempfile
 
 import pandas as pd
 
@@ -35,6 +37,7 @@ except ImportError:
 
 
 CUTOVER_CHECK_COLUMNS = ["section", "check_name", "expected", "actual", "status", "reason"]
+BASELINE_OVERWRITE_CONFIRM_TOKEN = "CONFIRM_BROKER_CUTOVER_BASELINE_OVERWRITE"
 
 
 def _check(section: str, name: str, expected, actual, status: str, reason: str) -> dict[str, object]:
@@ -155,6 +158,33 @@ def _symbols_text(frame: pd.DataFrame) -> str:
     return ",".join(symbols) if symbols else "none"
 
 
+def _existing_baseline_is_valid(path: Path) -> bool:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("forward_only") is True and bool(payload.get("baseline_created_at_utc"))
+
+
+def _atomic_write_baseline(path: Path, payload: dict[str, object]) -> None:
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True, default=str)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if not _existing_baseline_is_valid(temp_path):
+            raise OSError("baseline validation failed")
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+
 def write_broker_cutover_readiness(
     latest_dir: str | Path,
     broker_snapshot: ReadOnlyBrokerSnapshot | None = None,
@@ -211,12 +241,40 @@ def write_broker_cutover_readiness(
 def create_broker_cutover_baseline(
     latest_dir: str | Path,
     broker_snapshot: ReadOnlyBrokerSnapshot,
+    *,
+    allow_overwrite: bool = False,
+    confirm_token: str | None = None,
 ) -> dict[str, object]:
     latest = Path(latest_dir)
     latest.mkdir(parents=True, exist_ok=True)
     readiness = build_broker_cutover_readiness(latest, broker_snapshot)
     summary = readiness["summary"]
     baseline_path = latest / "broker_cutover_baseline.json"
+    baseline_exists = baseline_path.exists()
+    if baseline_exists and not _existing_baseline_is_valid(baseline_path):
+        return {
+            "created": False,
+            "overwritten": False,
+            "path": str(baseline_path),
+            "reason": "BASELINE_MALFORMED",
+            "summary": summary,
+        }
+    if baseline_exists and not allow_overwrite:
+        return {
+            "created": False,
+            "overwritten": False,
+            "path": str(baseline_path),
+            "reason": "BASELINE_EXISTS",
+            "summary": summary,
+        }
+    if baseline_exists and confirm_token != BASELINE_OVERWRITE_CONFIRM_TOKEN:
+        return {
+            "created": False,
+            "overwritten": False,
+            "path": str(baseline_path),
+            "reason": "BASELINE_OVERWRITE_CONFIRMATION_REQUIRED",
+            "summary": summary,
+        }
     if summary.get("alpaca_snapshot_status") != "PASS":
         return {
             "created": False,
@@ -240,6 +298,7 @@ def create_broker_cutover_baseline(
         "broker_account_snapshot_summary": metadata.get("alpaca_account_summary", {}),
         "local_historical_open_position_count": summary.get("local_open_position_count", 0),
         "broker_open_position_count": summary.get("broker_open_position_count", 0),
+        "broker_baseline_positions": _records(readiness["broker_positions"]),
         "broker_open_order_count": summary.get("broker_open_order_count", 0),
         "local_accepted_pending_count": summary.get("local_accepted_pending_count", 0),
         "local_broker_gap_status_at_baseline": summary.get("local_broker_gap_status", ""),
@@ -250,9 +309,19 @@ def create_broker_cutover_baseline(
         "short_trading_enabled": False,
         "state_mutated": False,
     }
-    baseline_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    try:
+        _atomic_write_baseline(baseline_path, payload)
+    except OSError:
+        return {
+            "created": False,
+            "overwritten": False,
+            "path": str(baseline_path),
+            "reason": "BASELINE_ATOMIC_WRITE_FAILED",
+            "summary": summary,
+        }
     return {
         "created": True,
+        "overwritten": baseline_exists,
         "path": str(baseline_path),
         "reason": "created",
         "summary": {**summary, "broker_baseline_file_exists": True},

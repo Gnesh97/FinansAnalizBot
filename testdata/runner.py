@@ -20,6 +20,7 @@ try:
     from .reports import (
         DIVIDEND_ADJUSTMENT_WARNING,
         SURVIVORSHIP_BIAS_WARNING,
+        SURVIVORSHIP_BIAS_BANNER,
         _add_compact_scores,
         _prefixed_benchmark_metrics,
         _write_compact_markdown,
@@ -105,6 +106,7 @@ except ImportError:
     from reports import (
         DIVIDEND_ADJUSTMENT_WARNING,
         SURVIVORSHIP_BIAS_WARNING,
+        SURVIVORSHIP_BIAS_BANNER,
         _add_compact_scores,
         _prefixed_benchmark_metrics,
         _write_compact_markdown,
@@ -2000,6 +2002,7 @@ def _report_row(experiment_name, params, metrics):
     row["Dividend Adjustment Warning"] = DIVIDEND_ADJUSTMENT_WARNING
     row.pop("_trade_log", None)
     row.pop("_equity_curve", None)
+    row.pop("_liquidity_skipped_entries", None)
     return row
 
 
@@ -2064,6 +2067,7 @@ def _build_experiment_tasks(
     daily_timeframe,
     cache_rebuilt,
     include_raw=False,
+    min_dollar_volume=0.0,
 ):
     tasks = []
     for index, experiment in enumerate(experiments, 1):
@@ -2077,8 +2081,11 @@ def _build_experiment_tasks(
                 "intraday_timeframe": intraday_timeframe,
                 "daily_timeframe": daily_timeframe,
                 "prepared_cache_rebuilt": cache_rebuilt,
+                "min_dollar_volume": float(min_dollar_volume or 0.0),
             }
         )
+        if "min_dollar_volume" in experiment:
+            params["min_dollar_volume"] = float(experiment["min_dollar_volume"] or 0.0)
         tasks.append(
             {
                 "index": index,
@@ -2480,7 +2487,7 @@ def _write_yearly_report(yearly, csv_path, markdown_path):
     except ImportError:
         table = yearly.to_string(index=False)
     markdown_path.write_text(
-        "\n".join(["# Yearly Performance Report", "", table, ""]),
+        "\n".join(["# Yearly Performance Report", "", SURVIVORSHIP_BIAS_BANNER, "", table, ""]),
         encoding="utf-8",
     )
 
@@ -2539,6 +2546,8 @@ def _oos_candidate_experiments(base_experiments):
         "rs_m126_top30_sma200_no_regime",
         "donchian_20_10_top20",
         "rs_m63_sma100",
+        "dm_m63_top20",
+        "mast_sma100_slope20_top20",
     ]
     missing = [name for name in wanted if name not in candidates]
     if missing:
@@ -2648,6 +2657,8 @@ def _write_oos_walkforward_report(oos, csv_path, markdown_path):
     ].sort_values("excess_vs_qqq_pct", ascending=False, na_position="last")
     content = [
         "# OOS Walkforward Report",
+        "",
+        SURVIVORSHIP_BIAS_BANNER,
         "",
         "## Best 5 By Period",
         "",
@@ -2838,6 +2849,8 @@ def _write_candidate_attribution_report(attribution, summary, csv_path, markdown
     content = [
         "# Candidate Attribution Report",
         "",
+        SURVIVORSHIP_BIAS_BANNER,
+        "",
         "## Concentration Summary",
         "",
         _table_for_markdown(summary),
@@ -2930,7 +2943,7 @@ def _max_positions_from_params(params):
     return 20
 
 
-def _entry_dollar_volumes(trades, asset_data):
+def _entry_bar_dollar_volumes(trades, asset_data):
     values = []
     for _, trade in trades.iterrows():
         symbol = str(trade.get("Symbol", "")).upper()
@@ -2957,7 +2970,7 @@ def _entry_dollar_volumes(trades, asset_data):
 def _trades_with_entry_liquidity(trades, asset_data):
     trades = trades.copy()
     if trades.empty:
-        trades["entry_dollar_volume"] = pd.Series(dtype=float)
+        trades["entry_bar_dollar_volume"] = pd.Series(dtype=float)
         return trades
     values = []
     for _, trade in trades.iterrows():
@@ -2979,7 +2992,7 @@ def _trades_with_entry_liquidity(trades, asset_data):
                 if pd.notna(close) and pd.notna(volume) and close > 0 and volume > 0:
                     value = float(close) * float(volume)
         values.append(value)
-    trades["entry_dollar_volume"] = pd.to_numeric(
+    trades["entry_bar_dollar_volume"] = pd.to_numeric(
         pd.Series(values),
         errors="coerce",
     ).to_numpy()
@@ -3028,13 +3041,13 @@ def _cost_adjusted_stats(trades, net_return, slippage_bps, fixed_fee):
 def _liquidity_stress_metrics(dollar_volumes, per_position):
     if dollar_volumes.empty:
         return {
-            "median_order_pct_of_dollar_volume": pd.NA,
-            "p10_order_pct_of_dollar_volume": pd.NA,
-            "min_order_pct_of_dollar_volume": pd.NA,
+            "median_order_pct_of_entry_bar_dollar_volume": pd.NA,
+            "p10_order_pct_of_entry_bar_dollar_volume": pd.NA,
+            "min_order_pct_of_entry_bar_dollar_volume": pd.NA,
             "liquidity_warning_count": 1,
-            "entries_below_1m_dollar_volume": 0,
-            "entries_below_500k_dollar_volume": 0,
-            "entries_below_100k_dollar_volume": 0,
+            "entries_below_1m_entry_bar_dollar_volume": 0,
+            "entries_below_500k_entry_bar_dollar_volume": 0,
+            "entries_below_100k_entry_bar_dollar_volume": 0,
         }
     median_dv = float(dollar_volumes.median())
     p10_dv = float(dollar_volumes.quantile(0.10))
@@ -3051,13 +3064,13 @@ def _liquidity_stress_metrics(dollar_volumes, per_position):
         + (below_100k > 0)
     )
     return {
-        "median_order_pct_of_dollar_volume": median_pct,
-        "p10_order_pct_of_dollar_volume": p10_pct,
-        "min_order_pct_of_dollar_volume": min_pct,
+        "median_order_pct_of_entry_bar_dollar_volume": median_pct,
+        "p10_order_pct_of_entry_bar_dollar_volume": p10_pct,
+        "min_order_pct_of_entry_bar_dollar_volume": min_pct,
         "liquidity_warning_count": warning_count,
-        "entries_below_1m_dollar_volume": below_1m,
-        "entries_below_500k_dollar_volume": below_500k,
-        "entries_below_100k_dollar_volume": below_100k,
+        "entries_below_1m_entry_bar_dollar_volume": below_1m,
+        "entries_below_500k_entry_bar_dollar_volume": below_500k,
+        "entries_below_100k_entry_bar_dollar_volume": below_100k,
     }
 
 
@@ -3074,7 +3087,7 @@ def _cost_stress_rows(cost_results, asset_data):
         qqq = row.get("QQQ BuyHold Return (%)", pd.NA)
         ew = row.get("EqualWeight Universe Return (%)", pd.NA)
         max_positions = _max_positions_from_params(params)
-        dollar_volumes = _entry_dollar_volumes(trades, asset_data)
+        dollar_volumes = _entry_bar_dollar_volumes(trades, asset_data)
         median_dv = round(float(dollar_volumes.median()), 2) if not dollar_volumes.empty else pd.NA
         p10_dv = round(float(dollar_volumes.quantile(0.10)), 2) if not dollar_volumes.empty else pd.NA
         min_dv = round(float(dollar_volumes.min()), 2) if not dollar_volumes.empty else pd.NA
@@ -3132,11 +3145,11 @@ def _cost_stress_rows(cost_results, asset_data):
                             and pd.notna(stats["profit_factor"])
                             and float(stats["profit_factor"]) > 1.0
                         ),
-                        "median_entry_dollar_volume": median_dv,
-                        "p10_entry_dollar_volume": p10_dv,
-                        "min_entry_dollar_volume": min_dv,
-                        "estimated_order_size_pct_of_dollar_volume": liquidity[
-                            "median_order_pct_of_dollar_volume"
+                        "median_entry_bar_dollar_volume": median_dv,
+                        "p10_entry_bar_dollar_volume": p10_dv,
+                        "min_entry_bar_dollar_volume": min_dv,
+                        "estimated_order_size_pct_of_entry_bar_dollar_volume": liquidity[
+                            "median_order_pct_of_entry_bar_dollar_volume"
                         ],
                         **liquidity,
                     }
@@ -3179,13 +3192,13 @@ def _write_cost_slippage_stress_report(stress, csv_path, markdown_path):
             "capital_assumption_usd",
             "max_positions",
             "per_position_notional",
-            "median_order_pct_of_dollar_volume",
-            "p10_order_pct_of_dollar_volume",
-            "min_order_pct_of_dollar_volume",
+            "median_order_pct_of_entry_bar_dollar_volume",
+            "p10_order_pct_of_entry_bar_dollar_volume",
+            "min_order_pct_of_entry_bar_dollar_volume",
             "liquidity_warning_count",
-            "entries_below_1m_dollar_volume",
-            "entries_below_500k_dollar_volume",
-            "entries_below_100k_dollar_volume",
+            "entries_below_1m_entry_bar_dollar_volume",
+            "entries_below_500k_entry_bar_dollar_volume",
+            "entries_below_100k_entry_bar_dollar_volume",
         ]
     ].sort_values(["capital_assumption_usd", "experiment_name"])
     warnings = []
@@ -3213,15 +3226,15 @@ def _write_cost_slippage_stress_report(stress, csv_path, markdown_path):
             )
     if not zero_rows.empty:
         median_ok = pd.to_numeric(
-            zero_rows["median_order_pct_of_dollar_volume"],
+            zero_rows["median_order_pct_of_entry_bar_dollar_volume"],
             errors="coerce",
         ).dropna().le(1).all()
         p10_ok = pd.to_numeric(
-            zero_rows["p10_order_pct_of_dollar_volume"],
+            zero_rows["p10_order_pct_of_entry_bar_dollar_volume"],
             errors="coerce",
         ).dropna().le(1).all()
         min_problem = pd.to_numeric(
-            zero_rows["min_order_pct_of_dollar_volume"],
+            zero_rows["min_order_pct_of_entry_bar_dollar_volume"],
             errors="coerce",
         ).dropna().gt(5).any()
         warnings.extend(
@@ -3233,6 +3246,8 @@ def _write_cost_slippage_stress_report(stress, csv_path, markdown_path):
         )
     content = [
         "# Cost Slippage Stress Report",
+        "",
+        SURVIVORSHIP_BIAS_BANNER,
         "",
         "## Net Return By Scenario (capital 10000)",
         "",
@@ -3258,8 +3273,30 @@ def _write_cost_slippage_stress_report(stress, csv_path, markdown_path):
 
 def _write_final_candidate_decision_report(report, oos, attribution_summary, cost_stress, markdown_path):
     decision = _final_candidate_decision_frame(report, oos, attribution_summary, cost_stress)
+
+    oos_status_note = ""
+    if "oos_avg_return" in decision and decision["oos_avg_return"].isna().any():
+        oos_status_note = (
+            "> [!CAUTION]\n"
+            "> **CRITICAL WARNING: MISSING OUT-OF-SAMPLE (OOS) METRICS**\n"
+            "> - **OOS metrics require the `--run-oos` flag** to be generated (e.g., `python universe_scanner.py --run-oos --run-attribution --run-cost-stress`).\n"
+            "> - **Final decision analysis is incomplete** without OOS / walk-forward performance validation.\n"
+            "> - **Survivorship bias remains unresolved**; absolute returns shown below are research-only and not investable evidence."
+        )
+    else:
+        oos_status_note = (
+            "> [!NOTE]\n"
+            "> **Out-of-Sample (OOS) Walk-Forward Metrics Loaded**\n"
+            "> - OOS metrics generated via `--run-oos` are included in the table below.\n"
+            "> - **Survivorship bias remains unresolved**; absolute returns shown below are research-only and not investable evidence."
+        )
+
     content = [
         "# Final Candidate Decision Report",
+        "",
+        SURVIVORSHIP_BIAS_BANNER,
+        "",
+        oos_status_note,
         "",
         "## Decision Table",
         "",
@@ -3272,6 +3309,7 @@ def _write_final_candidate_decision_report(report, oos, attribution_summary, cos
         "- Donchian is a diversifier/back-up because it is a different family and attribution is more distributed.",
         "- Top10 is research/aggressive only because concentration risk remains high despite strong return and cost survival.",
         "- m63 remains the baseline control.",
+        "- dm_m63_top20 and mast_sma100_slope20_top20 are included as family diversifier baselines.",
         "",
     ]
     markdown_path.write_text("\n".join(content), encoding="utf-8")
@@ -3284,6 +3322,8 @@ def _final_candidate_decision_frame(report, oos, attribution_summary, cost_stres
         "rs_m126_top10_sma100_no_regime",
         "donchian_20_10_top20",
         "rs_m63_sma100",
+        "dm_m63_top20",
+        "mast_sma100_slope20_top20",
     ]
     by_name = report.set_index("Experiment Name") if "Experiment Name" in report else pd.DataFrame()
     oos_numeric = oos.copy() if isinstance(oos, pd.DataFrame) else pd.DataFrame()
@@ -3312,6 +3352,8 @@ def _final_candidate_decision_frame(report, oos, attribution_summary, cost_stres
         "rs_m126_top10_sma100_no_regime": "research/aggressive only",
         "donchian_20_10_top20": "diversifier",
         "rs_m63_sma100": "baseline",
+        "dm_m63_top20": "dual_momentum_diversifier",
+        "mast_sma100_slope20_top20": "ma_slope_diversifier",
     }
     rows = []
     for name in candidates:
@@ -3383,11 +3425,11 @@ def _liquidity_guard_candidate_experiments(base_experiments):
 def _liquidity_guard_scenarios():
     return [
         ("no_liquidity_guard", None, None),
-        ("skip_entry_dollar_volume_below_100k", "min_dollar_volume", 100_000.0),
-        ("skip_entry_dollar_volume_below_500k", "min_dollar_volume", 500_000.0),
-        ("skip_entry_dollar_volume_below_1m", "min_dollar_volume", 1_000_000.0),
-        ("skip_order_pct_of_dollar_volume_above_1pct", "max_order_pct", 1.0),
-        ("skip_order_pct_of_dollar_volume_above_5pct", "max_order_pct", 5.0),
+        ("skip_entry_bar_dollar_volume_below_100k", "min_entry_bar_dollar_volume", 100_000.0),
+        ("skip_entry_bar_dollar_volume_below_500k", "min_entry_bar_dollar_volume", 500_000.0),
+        ("skip_entry_bar_dollar_volume_below_1m", "min_entry_bar_dollar_volume", 1_000_000.0),
+        ("skip_order_pct_of_entry_bar_dollar_volume_above_1pct", "max_order_pct", 1.0),
+        ("skip_order_pct_of_entry_bar_dollar_volume_above_5pct", "max_order_pct", 5.0),
     ]
 
 
@@ -3424,10 +3466,10 @@ def _adjusted_equity_stats(equity_curve, skipped_trades):
 
 
 def _liquidity_guard_mask(trades, scenario_kind, scenario_value, per_position):
-    dollar_volume = pd.to_numeric(trades.get("entry_dollar_volume"), errors="coerce")
+    dollar_volume = pd.to_numeric(trades.get("entry_bar_dollar_volume"), errors="coerce")
     if scenario_kind is None:
         return pd.Series(False, index=trades.index)
-    if scenario_kind == "min_dollar_volume":
+    if scenario_kind == "min_entry_bar_dollar_volume":
         return dollar_volume.lt(float(scenario_value)).fillna(False)
     if scenario_kind == "max_order_pct":
         order_pct = (float(per_position) / dollar_volume.replace(0, pd.NA)) * 100.0
@@ -3548,11 +3590,11 @@ def _liquidity_guard_sensitivity_rows(results, asset_data):
 
 def _best_guard_for_capital(frame, capital, experiment_name):
     priority = [
-        "skip_entry_dollar_volume_below_100k",
-        "skip_entry_dollar_volume_below_500k",
-        "skip_entry_dollar_volume_below_1m",
-        "skip_order_pct_of_dollar_volume_above_5pct",
-        "skip_order_pct_of_dollar_volume_above_1pct",
+        "skip_entry_bar_dollar_volume_below_100k",
+        "skip_entry_bar_dollar_volume_below_500k",
+        "skip_entry_bar_dollar_volume_below_1m",
+        "skip_order_pct_of_entry_bar_dollar_volume_above_5pct",
+        "skip_order_pct_of_entry_bar_dollar_volume_above_1pct",
     ]
     subset = frame[
         frame["capital_assumption_usd"].eq(capital)
@@ -3592,10 +3634,10 @@ def _write_liquidity_guard_sensitivity_report(report, csv_path, markdown_path):
         ]
         return subset.iloc[0] if not subset.empty else pd.Series(dtype=object)
 
-    top30_500k = _scenario_row("rs_m126_top30_sma100_no_regime", "skip_entry_dollar_volume_below_500k")
-    top20_500k = _scenario_row("rs_m126_top20_sma100_no_regime", "skip_entry_dollar_volume_below_500k")
-    top10_500k = _scenario_row("rs_m126_top10_sma100_no_regime", "skip_entry_dollar_volume_below_500k")
-    donchian_500k = _scenario_row("donchian_20_10_top20", "skip_entry_dollar_volume_below_500k")
+    top30_500k = _scenario_row("rs_m126_top30_sma100_no_regime", "skip_entry_bar_dollar_volume_below_500k")
+    top20_500k = _scenario_row("rs_m126_top20_sma100_no_regime", "skip_entry_bar_dollar_volume_below_500k")
+    top10_500k = _scenario_row("rs_m126_top10_sma100_no_regime", "skip_entry_bar_dollar_volume_below_500k")
+    donchian_500k = _scenario_row("donchian_20_10_top20", "skip_entry_bar_dollar_volume_below_500k")
     top30_main = bool(top30_500k.get("liquidity_guard_pass", False)) and pd.to_numeric(
         pd.Series([top30_500k.get("excess_vs_qqq_pct", pd.NA)]),
         errors="coerce",
@@ -3619,6 +3661,14 @@ def _write_liquidity_guard_sensitivity_report(report, csv_path, markdown_path):
     ]
     content = [
         "# Liquidity Guard Sensitivity Report",
+        "",
+        SURVIVORSHIP_BIAS_BANNER,
+        "",
+        "> [!IMPORTANT]",
+        "> **Report Clarification & Scope Guidance**",
+        "> - **Definition**: This report uses **post-hoc entry-bar dollar volume** (calculated as `entry_bar_Close * entry_bar_Volume`) to model hypothetical post-backtest trade execution exclusions.",
+        "> - **Not Signal-Date ADV**: This is strictly entry-bar volume from actual trade execution time, *not* signal-date Average Daily Volume (ADV) metrics.",
+        "> - **Not In-Simulation Eligibility**: These guard scenarios are post-hoc calculations evaluated from final trade logs. They do *not* represent in-simulation entry eligibility, which is handled dynamically by the strategy-level liquidity filters.",
         "",
         "## Decision Summary",
         "",
@@ -6276,13 +6326,13 @@ def _chatgpt_cost_section(cost_stress):
         "capital_assumption_usd",
         "max_positions",
         "per_position_notional",
-        "median_order_pct_of_dollar_volume",
-        "p10_order_pct_of_dollar_volume",
-        "min_order_pct_of_dollar_volume",
+        "median_order_pct_of_entry_bar_dollar_volume",
+        "p10_order_pct_of_entry_bar_dollar_volume",
+        "min_order_pct_of_entry_bar_dollar_volume",
         "liquidity_warning_count",
-        "entries_below_1m_dollar_volume",
-        "entries_below_500k_dollar_volume",
-        "entries_below_100k_dollar_volume",
+        "entries_below_1m_entry_bar_dollar_volume",
+        "entries_below_500k_entry_bar_dollar_volume",
+        "entries_below_100k_entry_bar_dollar_volume",
     ]
     return [
         "## Cost / Slippage / Liquidity Stress",
@@ -6322,7 +6372,7 @@ def _chatgpt_liquidity_guard_section(liquidity_guard_sensitivity):
     ]
     top30 = liquidity_guard_sensitivity[
         liquidity_guard_sensitivity["experiment_name"].eq("rs_m126_top30_sma100_no_regime")
-        & liquidity_guard_sensitivity["guard_scenario"].eq("skip_entry_dollar_volume_below_500k")
+        & liquidity_guard_sensitivity["guard_scenario"].eq("skip_entry_bar_dollar_volume_below_500k")
     ]
     top30_main = bool(
         not top30.empty
@@ -7056,6 +7106,41 @@ def run_broker_reconciliation(data_folder="hisseler", report_output_dir="reports
     return result
 
 
+def run_broker_order_lifecycle_monitor(data_folder="hisseler", report_output_dir="reports", *, lifecycle_write_authorized=False):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    env_path = Path(data_folder).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        env_path = Path.cwd() / ".env"
+    api_key, secret_key, base_url = _alpaca_config(env_path)
+    broker_snapshot = read_alpaca_paper_snapshot(
+        api_key=api_key,
+        secret_key=secret_key,
+        base_url=base_url,
+        allow_state_write=lifecycle_write_authorized,
+        broker_submit_enabled=False,
+        live_trading_enabled=False,
+    )
+    try:
+        from .broker_lifecycle import check_broker_order_lifecycle
+    except ImportError:
+        from broker_lifecycle import check_broker_order_lifecycle
+    result = check_broker_order_lifecycle(
+        latest_dir=latest_dir,
+        broker_snapshot=broker_snapshot,
+        api_key=api_key,
+        secret_key=secret_key,
+        base_url=base_url,
+        allow_state_write=lifecycle_write_authorized,
+    )
+    summary = result.get("summary", {})
+    print(f"Broker order lifecycle monitor: {latest_dir / 'broker_order_lifecycle.md'}")
+    print(f"Broker order lifecycle json: {latest_dir / 'broker_order_lifecycle.json'}")
+    print(f"lifecycle_status: {summary.get('status', '')}")
+    print(f"state_mutated: {summary.get('state_mutated', False)}")
+    print(f"lifecycle_write_authorized: {summary.get('lifecycle_write_authorized', False)}")
+    return result
+
+
 def _read_alpaca_paper_snapshot_for_data_folder(data_folder):
     env_path = Path(data_folder).resolve().parents[1] / ".env"
     if not env_path.exists():
@@ -7508,11 +7593,16 @@ def run_strategy_experiments(
     force_rebuild_prepared_cache=False,
     **kwargs,
 ):
+    min_dollar_volume = float(kwargs.get("min_dollar_volume", 0.0) or 0.0)
     total_started = _now()
     cpu_started = time.process_time()
     report_mode = str(reports or "basic").lower()
     if report_mode not in {"basic", "full"}:
         raise ValueError("--reports 'basic' veya 'full' olmali.")
+    if report_mode == "full":
+        run_oos = True
+        run_attribution = True
+        run_cost_stress = True
     if write_yearly_performance_report is None:
         write_yearly_performance_report = report_mode == "full"
     if write_rs_robustness_report is None:
@@ -7607,6 +7697,7 @@ def run_strategy_experiments(
         daily_timeframe,
         cache_rebuilt,
         include_raw=write_yearly_performance_report,
+        min_dollar_volume=min_dollar_volume,
     )
     baseline_results, baseline_parallel_runtime_sec = _run_experiment_batch(
         tasks,
@@ -8268,6 +8359,18 @@ def run_strategy_experiments(
         print(f"WARNING: SQLite mirror execution failed: {e_sql}")
 
     if make_chatgpt_report:
+        try:
+            print("Refreshing test run report before writing ChatGPT master report...")
+            from testdata.run_test_suite import main as run_tests
+            run_tests()
+        except ImportError:
+            try:
+                from run_test_suite import main as run_tests
+                run_tests()
+            except Exception as e_tests:
+                print(f"WARNING: Could not refresh test run report: {e_tests}")
+        except Exception as e_tests:
+            print(f"WARNING: Could not refresh test run report: {e_tests}")
         for directory in [latest_dir, run_dir]:
             _write_chatgpt_master_report(
                 report,

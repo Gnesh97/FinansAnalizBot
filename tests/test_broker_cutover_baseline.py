@@ -6,7 +6,12 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from testdata.broker_cutover_baseline import build_broker_cutover_readiness, create_broker_cutover_baseline, write_broker_cutover_readiness
+from testdata.broker_cutover_baseline import (
+    BASELINE_OVERWRITE_CONFIRM_TOKEN,
+    build_broker_cutover_readiness,
+    create_broker_cutover_baseline,
+    write_broker_cutover_readiness,
+)
 from testdata.broker_reconciliation import ReadOnlyBrokerSnapshot, build_broker_reconciliation
 from testdata.runner import run_broker_cutover_readiness, run_create_broker_cutover_baseline
 
@@ -130,6 +135,96 @@ class BrokerCutoverBaselineTest(unittest.TestCase):
 
             self.assertFalse(result["created"])
             self.assertFalse((latest / "broker_cutover_baseline.json").exists())
+
+    def test_existing_baseline_is_immutable_without_overwrite_authorization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            _write_state(latest, trades=[], orders=[])
+            create_broker_cutover_baseline(latest, _snapshot(positions=[]))
+            path = latest / "broker_cutover_baseline.json"
+            before = path.read_bytes()
+
+            result = create_broker_cutover_baseline(latest, _snapshot(positions=[{"symbol": "FIXA", "qty": 1}]))
+
+            self.assertFalse(result["created"])
+            self.assertEqual(result["reason"], "BASELINE_EXISTS")
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_overwrite_requires_exact_confirmation_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            _write_state(latest, trades=[], orders=[])
+            create_broker_cutover_baseline(latest, _snapshot(positions=[]))
+            path = latest / "broker_cutover_baseline.json"
+            before = path.read_bytes()
+
+            result = create_broker_cutover_baseline(
+                latest,
+                _snapshot(positions=[{"symbol": "FIXA", "qty": 1}]),
+                allow_overwrite=True,
+                confirm_token="WRONG",
+            )
+
+            self.assertFalse(result["created"])
+            self.assertEqual(result["reason"], "BASELINE_OVERWRITE_CONFIRMATION_REQUIRED")
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_exact_overwrite_authorization_replaces_valid_temp_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            _write_state(latest, trades=[], orders=[])
+            create_broker_cutover_baseline(latest, _snapshot(positions=[]))
+
+            result = create_broker_cutover_baseline(
+                latest,
+                _snapshot(positions=[{"symbol": "FIXA", "qty": 1}]),
+                allow_overwrite=True,
+                confirm_token=BASELINE_OVERWRITE_CONFIRM_TOKEN,
+            )
+
+            payload = json.loads((latest / "broker_cutover_baseline.json").read_text(encoding="utf-8"))
+            self.assertTrue(result["created"])
+            self.assertTrue(result["overwritten"])
+            self.assertEqual(payload["broker_baseline_positions"][0]["symbol"], "FIXA")
+
+    def test_malformed_existing_baseline_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            _write_state(latest, trades=[], orders=[])
+            path = latest / "broker_cutover_baseline.json"
+            path.write_text("not-json", encoding="utf-8")
+            before = path.read_bytes()
+
+            result = create_broker_cutover_baseline(
+                latest,
+                _snapshot(positions=[]),
+                allow_overwrite=True,
+                confirm_token=BASELINE_OVERWRITE_CONFIRM_TOKEN,
+            )
+
+            self.assertFalse(result["created"])
+            self.assertEqual(result["reason"], "BASELINE_MALFORMED")
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_failed_atomic_write_preserves_existing_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp)
+            _write_state(latest, trades=[], orders=[])
+            create_broker_cutover_baseline(latest, _snapshot(positions=[]))
+            path = latest / "broker_cutover_baseline.json"
+            before = path.read_bytes()
+
+            with patch("testdata.broker_cutover_baseline.os.replace", side_effect=OSError("replace blocked")):
+                result = create_broker_cutover_baseline(
+                    latest,
+                    _snapshot(positions=[{"symbol": "FIXA", "qty": 1}]),
+                    allow_overwrite=True,
+                    confirm_token=BASELINE_OVERWRITE_CONFIRM_TOKEN,
+                )
+
+            self.assertFalse(result["created"])
+            self.assertEqual(result["reason"], "BASELINE_ATOMIC_WRITE_FAILED")
+            self.assertEqual(path.read_bytes(), before)
 
     def test_runner_writes_cutover_reports_with_get_only_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:

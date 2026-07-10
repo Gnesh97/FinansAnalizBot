@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -46,6 +47,13 @@ def _clean_text(value) -> str:
 def _number(value, default=0.0) -> float:
     parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     return float(parsed) if pd.notna(parsed) else float(default)
+
+
+def _strict_number(value) -> float:
+    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(parsed) or not math.isfinite(float(parsed)):
+        raise ValueError("numeric value required")
+    return float(parsed)
 
 
 def _status_series(frame: pd.DataFrame) -> pd.Series:
@@ -169,6 +177,116 @@ def _avg_map(frame: pd.DataFrame) -> dict[str, float]:
     return {str(row.get("symbol", "")).upper(): _number(row.get("avg_price", 0.0)) for _, row in frame.iterrows()}
 
 
+FORWARD_OPEN_STATUSES = {"SUBMITTED", "ACCEPTED/NEW", "PENDING_CANCEL", "PENDING_REPLACE", "PARTIALLY_FILLED"}
+FORWARD_FILL_STATUSES = {"PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED"}
+
+
+def _forward_baseline(latest: Path) -> tuple[dict[str, float] | None, str]:
+    path = latest / "broker_cutover_baseline.json"
+    if not path.exists():
+        return None, "BASELINE_MISSING"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, "BASELINE_MALFORMED"
+    if not isinstance(payload, dict) or payload.get("forward_only") is not True or not isinstance(payload.get("broker_baseline_positions"), list):
+        return None, "BASELINE_MALFORMED"
+    positions: dict[str, float] = {}
+    try:
+        for row in payload["broker_baseline_positions"]:
+            if not isinstance(row, dict):
+                raise ValueError
+            symbol = _clean_text(row.get("symbol", "")).upper()
+            if not symbol:
+                raise ValueError
+            positions[symbol] = _strict_number(row.get("qty", 0.0))
+    except (TypeError, ValueError):
+        return None, "BASELINE_MALFORMED"
+    return positions, "PASS"
+
+
+def _strict_broker_snapshot(snapshot: ReadOnlyBrokerSnapshot) -> tuple[dict[str, float] | None, list[dict[str, object]] | None, str]:
+    positions: dict[str, float] = {}
+    orders: list[dict[str, object]] = []
+    try:
+        for row in snapshot.positions:
+            if not isinstance(row, dict):
+                raise ValueError
+            symbol = _clean_text(row.get("symbol", "")).upper()
+            if not symbol:
+                raise ValueError
+            qty = _strict_number(row.get("qty", row.get("shares", 0.0)))
+            positions[symbol] = qty
+        for row in snapshot.open_orders:
+            if not isinstance(row, dict):
+                raise ValueError
+            client_id = _clean_text(row.get("client_order_id", ""))
+            broker_id = _clean_text(row.get("id", row.get("broker_order_id", "")))
+            if not client_id and not broker_id:
+                raise ValueError
+            orders.append({"client_order_id": client_id, "broker_order_id": broker_id, "status": _clean_text(row.get("status", "")).upper()})
+    except (TypeError, ValueError):
+        return None, None, "BROKER_SNAPSHOT_MALFORMED"
+    return positions, orders, "PASS"
+
+
+def build_forward_broker_reconciliation(latest_dir: str | Path, broker_snapshot: ReadOnlyBrokerSnapshot | None = None, *, tolerance: float = 1e-6) -> dict[str, object]:
+    """Pure forward-only reconciliation: baseline position plus durable-ledger delta."""
+    latest = Path(latest_dir)
+    checks: list[dict[str, object]] = []
+    baseline, baseline_status = _forward_baseline(latest)
+    if baseline is None:
+        checks.append(_check("forward_baseline", "baseline_available", "valid forward baseline", baseline_status, "WARNING", baseline_status))
+        return _forward_result(checks, 0, 0)
+    if broker_snapshot is None:
+        checks.append(_check("broker_snapshot", "broker_snapshot_available", "snapshot", "none", "WARNING", "BROKER_SNAPSHOT_NOT_AVAILABLE"))
+        return _forward_result(checks, 0, 0)
+    positions, broker_orders, snapshot_status = _strict_broker_snapshot(broker_snapshot)
+    if positions is None or broker_orders is None:
+        checks.append(_check("broker_snapshot", "broker_snapshot_valid", "valid", snapshot_status, "WARNING", snapshot_status))
+        return _forward_result(checks, 0, 0)
+    try:
+        from .broker_ledger import BrokerLedgerError, load_broker_ledger
+    except ImportError:
+        from broker_ledger import BrokerLedgerError, load_broker_ledger
+    try:
+        ledger = load_broker_ledger(latest)
+    except BrokerLedgerError as error:
+        checks.append(_check("durable_ledger", "ledger_valid", "valid", "invalid", "WARNING", str(error)))
+        return _forward_result(checks, 0, 0)
+
+    delta: dict[str, float] = {}
+    ledger_open: list[dict[str, object]] = []
+    for _, row in ledger.iterrows():
+        status = _clean_text(row.get("status", "")).upper()
+        symbol = _clean_text(row.get("symbol", "")).upper()
+        filled = _number(row.get("filled_qty", 0.0))
+        if status in FORWARD_FILL_STATUSES and filled > 0:
+            delta[symbol] = delta.get(symbol, 0.0) + (filled if _clean_text(row.get("side", "")).lower() == "buy" else -filled)
+        if status in FORWARD_OPEN_STATUSES:
+            ledger_open.append({"client_order_id": _clean_text(row.get("client_order_id", "")), "broker_order_id": _clean_text(row.get("broker_order_id", "")), "status": status})
+    broker_client = {order["client_order_id"] for order in broker_orders if order["client_order_id"]}
+    broker_ids = {order["broker_order_id"] for order in broker_orders if order["broker_order_id"]}
+    ledger_only = [row for row in ledger_open if row["client_order_id"] not in broker_client and row["broker_order_id"] not in broker_ids]
+    ledger_client = {row["client_order_id"] for row in ledger_open if row["client_order_id"]}
+    ledger_ids = {row["broker_order_id"] for row in ledger_open if row["broker_order_id"]}
+    broker_only = [row for row in broker_orders if row["client_order_id"] not in ledger_client and row["broker_order_id"] not in ledger_ids]
+    checks.append(_check("forward_orders", "ledger_only_order_count", 0, len(ledger_only), "FAIL" if ledger_only else "PASS", "identifier_match_required"))
+    checks.append(_check("forward_orders", "broker_only_order_count", 0, len(broker_only), "FAIL" if broker_only else "PASS", "identifier_match_required"))
+    expected_symbols = set(baseline) | set(delta) | set(positions)
+    for symbol in sorted(expected_symbols):
+        expected = baseline.get(symbol, 0.0) + delta.get(symbol, 0.0)
+        actual = positions.get(symbol, 0.0)
+        checks.append(_check("forward_positions", f"position_{symbol}", expected, actual, "PASS" if abs(expected - actual) <= tolerance else "FAIL", "baseline_plus_signed_forward_delta"))
+    return _forward_result(checks, len(ledger_only), len(broker_only))
+
+
+def _forward_result(checks: list[dict[str, object]], ledger_only_count: int, broker_only_count: int) -> dict[str, object]:
+    statuses = [str(check["status"]).upper() for check in checks]
+    status = "FAIL" if "FAIL" in statuses else ("WARNING" if "WARNING" in statuses else "PASS")
+    return {"summary": {"reconciliation_status": status, "ledger_only_order_count": ledger_only_count, "broker_only_order_count": broker_only_count, "state_mutated": False, "read_only_mode": True, "forward_only_excludes_pre_cutover_local_positions": True}, "checks": pd.DataFrame(checks, columns=REPORT_COLUMNS)}
+
+
 def build_broker_reconciliation(
     latest_dir: str | Path,
     broker_snapshot: ReadOnlyBrokerSnapshot | None = None,
@@ -283,9 +401,12 @@ def build_broker_reconciliation(
         checks.append(_check("fill_reconciliation", "broker_fills_without_local_trade_count", 0, len(broker_snapshot.fills), "WARNING" if broker_snapshot.fills else "PASS", "fill_reconciliation_placeholder"))
         checks.append(_check("fill_reconciliation", "local_trades_without_broker_fill_count", local_filled_count, "not_compared", "WARNING" if local_filled_count else "PASS", "fill_reconciliation_placeholder"))
 
+    recon_forward = build_forward_broker_reconciliation(latest, broker_snapshot)
+
     checks.extend(_safety_checks())
     checks_frame = pd.DataFrame(checks, columns=REPORT_COLUMNS)
     summary = _summary(checks, snapshot_source, broker_snapshot.metadata)
+    summary["forward_only_reconciliation_status"] = recon_forward["summary"]["reconciliation_status"]
     return {
         "summary": summary,
         "checks": checks_frame,
@@ -435,6 +556,7 @@ def write_broker_reconciliation(
 ) -> dict[str, object]:
     latest = Path(latest_dir)
     latest.mkdir(parents=True, exist_ok=True)
+
     result = build_broker_reconciliation(latest, broker_snapshot)
     csv_path = latest / "broker_reconciliation.csv"
     md_path = latest / "broker_reconciliation.md"

@@ -50,6 +50,11 @@ output/
 testdata/state/*.sqlite3
 testdata/state/*.sqlite3-wal
 testdata/state/*.sqlite3-shm
+testdata/state/broker_submit_intents.json
+testdata/state/broker_submit_intents.json.lock
+testdata/state/broker_submit_intents.json.*.tmp
+testdata/state/broker_order_ledger.csv.lock
+testdata/state/broker_order_ledger.csv.*.tmp
 
 # Tooling repos and generated outputs
 ECC/
@@ -58,6 +63,7 @@ ECC/
 .claude/
 .codex/
 .cursor/
+.agent/
 node_modules/
 pnpm-lock.yaml
-skills-lock.json
+skills-lock.json

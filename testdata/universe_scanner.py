@@ -3,13 +3,13 @@ try:
     import sys
     from pathlib import Path
 
-    from .runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
+    from .runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_order_lifecycle_monitor, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 except ImportError:
     import argparse
     import sys
     from pathlib import Path
 
-    from runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
+    from runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_order_lifecycle_monitor, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 
 
 VALIDATION_EXPERIMENTS = [
@@ -197,6 +197,12 @@ if __name__ == "__main__":
         help="Run report-level liquidity guard sensitivity; does not change trade logic.",
     )
     parser.add_argument(
+        "--dynamic-liquidity-min-dollar-volume",
+        type=float,
+        default=0.0,
+        help="Opt-in in-simulation entry liquidity filter; 0 disables, suggested test value 500000.",
+    )
+    parser.add_argument(
         "--make-chatgpt-report",
         action="store_true",
         help="Write reports/latest/chatgpt_master_report.md for a single-file ChatGPT handoff.",
@@ -319,6 +325,16 @@ if __name__ == "__main__":
         help="Write report-only local-vs-broker reconciliation skeleton; no broker submit or POST.",
     )
     parser.add_argument(
+        "--broker-order-lifecycle-monitor",
+        action="store_true",
+        help="Track broker-submitted forward-only orders through lifecycle states.",
+    )
+    parser.add_argument(
+        "--broker-order-lifecycle-write",
+        action="store_true",
+        help="Explicitly authorize durable lifecycle ledger updates; monitor defaults to report-only.",
+    )
+    parser.add_argument(
         "--broker-cutover-readiness",
         action="store_true",
         help="Write forward-only Alpaca paper cutover readiness report; no broker submit or POST.",
@@ -402,6 +418,12 @@ if __name__ == "__main__":
     if args.broker_reconciliation:
         run_broker_reconciliation(str(data_folder), alpaca_paper_snapshot_readonly=args.alpaca_paper_snapshot_readonly)
         raise SystemExit(0)
+    if args.broker_order_lifecycle_monitor:
+        run_broker_order_lifecycle_monitor(
+            str(data_folder),
+            lifecycle_write_authorized=args.broker_order_lifecycle_write,
+        )
+        raise SystemExit(0)
     if args.broker_cutover_readiness:
         run_broker_cutover_readiness(str(data_folder))
         raise SystemExit(0)
@@ -423,6 +445,7 @@ if __name__ == "__main__":
         run_attribution=args.run_attribution,
         run_cost_stress=args.run_cost_stress,
         run_liquidity_guard_sensitivity=args.run_liquidity_guard_sensitivity,
+        min_dollar_volume=args.dynamic_liquidity_min_dollar_volume,
         make_chatgpt_report=args.make_chatgpt_report,
         paper_report=args.paper_report,
         paper_strategy=args.paper_strategy,

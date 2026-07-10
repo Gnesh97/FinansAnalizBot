@@ -14,6 +14,7 @@ LATEST_DIR = ROOT / "testdata" / "reports" / "latest"
 COMPILE_TARGETS = [
     "testdata/report_schemas.py",
     "testdata/paper_state_manager.py",
+    "testdata/portfolio_manager.py",
     "testdata/paper_portfolio_monitor.py",
     "testdata/intraday_paper_monitor.py",
     "testdata/paper_ops_dashboard.py",
@@ -29,6 +30,7 @@ COMPILE_TARGETS = [
     "testdata/alpaca_paper_submit_one.py",
     "testdata/paper_decision_inbox.py",
     "testdata/runner.py",
+    "testdata/universe_scanner.py",
     "testdata/execution_engine.py",
     "testdata/pre_submit_gate.py",
     "testdata/data_policy_review.py",
@@ -36,6 +38,8 @@ COMPILE_TARGETS = [
     "testdata/broker_interface.py",
     "testdata/alpaca_paper_broker.py",
     "testdata/vericekici_updated.py",
+    "testdata/broker_ledger.py",
+    "testdata/broker_lifecycle.py",
 ]
 
 

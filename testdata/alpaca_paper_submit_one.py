@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import socket
+import math
 from pathlib import Path
 import urllib.error
 
@@ -21,6 +21,9 @@ try:
         _preview_payloads,
     )
     from .broker_reconciliation import ReadOnlyBrokerSnapshot, _markdown_table, _metric_table, _records
+    from .broker_ledger import append_order_to_ledger, find_order_by_client_order_id
+    from .broker_lifecycle import ALPACA_LIFECYCLE_MAP
+    from .broker_submit_recovery import SubmitIntentError, SubmitIntentStore
 except ImportError:
     from alpaca_paper_broker import AlpacaPaperOrderSubmitClient
     from alpaca_paper_snapshot import alpaca_endpoint_mode
@@ -35,6 +38,9 @@ except ImportError:
         _preview_payloads,
     )
     from broker_reconciliation import ReadOnlyBrokerSnapshot, _markdown_table, _metric_table, _records
+    from broker_ledger import append_order_to_ledger, find_order_by_client_order_id
+    from broker_lifecycle import ALPACA_LIFECYCLE_MAP
+    from broker_submit_recovery import SubmitIntentError, SubmitIntentStore
 
 
 CONFIRM_TOKEN = "CONFIRM_ALPACA_PAPER_SUBMIT_ONE"
@@ -112,6 +118,17 @@ def _gate_checks(
     candidate_count = int(len(preview))
     confirm_ok = confirm_token == CONFIRM_TOKEN
     qty_xor_ok = bool(preview.empty or preview["qty_notional_exclusive"].all())
+    candidate_symbols_valid = bool(
+        candidate_count == 1
+        and preview["symbol"].astype(str).str.fullmatch(r"[A-Z][A-Z0-9.\-]{0,14}").all()
+    )
+    candidate_sides_valid = bool(
+        candidate_count == 1 and preview["side"].astype(str).str.lower().eq("buy").all()
+    )
+    deterministic_client_order_id = bool(
+        candidate_count == 1
+        and preview["client_order_id"].astype(str).str.fullmatch(r"fpap-[0-9a-f]{40}").all()
+    )
 
     checks = [
         _check("baseline", "broker_cutover_baseline_exists", True, baseline_exists, "PASS" if baseline_exists else "BLOCK", "explicit_forward_only_baseline_required"),
@@ -120,6 +137,9 @@ def _gate_checks(
         _check("submit_gate", "broker_submit_enabled", True, broker_submit_enabled, "PASS" if broker_submit_enabled else "BLOCK", "explicit_enable_required"),
         _check("submit_gate", "confirm_token", CONFIRM_TOKEN, "provided" if confirm_token else "missing", "PASS" if confirm_ok else "BLOCK", "operator_confirm_token_required"),
         _check("submit_gate", "max_submit_candidates", 1, candidate_count, "PASS" if candidate_count == 1 else "BLOCK", "exactly_one_candidate_required"),
+        _check("submit_gate", "candidate_symbol_valid", True, candidate_symbols_valid, "PASS" if candidate_symbols_valid else "BLOCK", "selected_candidate_symbol_required"),
+        _check("submit_gate", "candidate_side_long_only", "buy", "buy" if candidate_sides_valid else "invalid", "PASS" if candidate_sides_valid else "BLOCK", "long_only_paper_submit"),
+        _check("submit_gate", "deterministic_client_order_id", True, deterministic_client_order_id, "PASS" if deterministic_client_order_id else "BLOCK", "derived_from_selected_candidate"),
         _check("submit_gate", "live_trading_enabled", False, live_trading_enabled, "BLOCK" if live_trading_enabled else "PASS", "live_trading_must_stay_disabled"),
         _check("submit_gate", "short_trading_enabled", False, short_trading_enabled, "BLOCK" if short_trading_enabled else "PASS", "short_trading_must_stay_disabled"),
         _check("submit_gate", "extended_hours", False, False, "PASS", "extended_hours_false_until_approved"),
@@ -138,6 +158,9 @@ def _gate_checks(
         "confirm_token_provided": bool(confirm_token),
         "confirm_token_valid": confirm_ok,
         "submit_candidate_count": candidate_count,
+        "candidate_symbol_valid": candidate_symbols_valid,
+        "candidate_side_long_only": candidate_sides_valid,
+        "deterministic_client_order_id": deterministic_client_order_id,
         "alpaca_snapshot_status": snapshot_status,
         "paper_endpoint_mode": endpoint_mode,
         "buying_power": buying_power,
@@ -154,12 +177,95 @@ def _gate_checks(
     return pd.DataFrame(checks, columns=READINESS_COLUMNS), summary
 
 
-def _readback(client, client_order_id: str) -> tuple[bool, dict[str, object] | None, str]:
+def _finite_non_negative(value, field: str) -> float:
     try:
-        payload = client.read_order_by_client_order_id(client_order_id)
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} is not numeric") from exc
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{field} must be finite and non-negative")
+    return number
+
+
+def _validate_broker_evidence(payload: object, order: dict[str, object]) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise ValueError("response is not a dict")
+    client_order_id = str(payload.get("client_order_id", "")).strip()
+    if client_order_id != str(order["client_order_id"]):
+        raise ValueError("client_order_id mismatch")
+    broker_order_id = str(payload.get("id", payload.get("broker_order_id", ""))).strip()
+    if not broker_order_id:
+        raise ValueError("broker order id is missing")
+    raw_status = str(payload.get("status", "")).strip().lower()
+    if raw_status not in ALPACA_LIFECYCLE_MAP:
+        raise ValueError("broker status is not recognized")
+    if str(payload.get("symbol", "")).strip().upper() != str(order["symbol"]).upper():
+        raise ValueError("symbol mismatch")
+    if str(payload.get("side", "")).strip().lower() != str(order["side"]).lower():
+        raise ValueError("side mismatch")
+    quantities: dict[str, float] = {}
+    for field in ("qty", "notional", "filled_qty"):
+        if field not in payload:
+            if field == "filled_qty":
+                raise ValueError("filled_qty is missing")
+            continue
+        quantities[field] = _finite_non_negative(payload[field], field)
+    if not {"qty", "notional"}.intersection(quantities):
+        raise ValueError("qty or notional is missing")
+    return {
+        "broker_order_id": broker_order_id,
+        "raw_status": raw_status,
+        "status": ALPACA_LIFECYCLE_MAP[raw_status],
+        "qty": quantities.get("qty", 0.0),
+        "notional": quantities.get("notional", 0.0),
+        "filled_qty": quantities["filled_qty"],
+    }
+
+
+def _lookup_broker(client, order: dict[str, object]) -> tuple[str, dict[str, object] | None, str]:
+    try:
+        response = client.read_order_by_client_order_id(str(order["client_order_id"]))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return "NOT_FOUND", None, "broker_not_found"
+        return "UNCERTAIN", None, _sanitize_error(error)
+    except LookupError:
+        return "NOT_FOUND", None, "broker_not_found"
     except Exception as error:
-        return False, None, _sanitize_error(error)
-    return True, payload if isinstance(payload, dict) else {}, "ok"
+        return "UNCERTAIN", None, _sanitize_error(error)
+    if response is None:
+        return "NOT_FOUND", None, "broker_not_found"
+    try:
+        return "CONFIRMED", _validate_broker_evidence(response, order), "broker_confirmed"
+    except ValueError as error:
+        return "UNCERTAIN", None, f"invalid_broker_evidence:{error}"
+
+
+def _commit_confirmed_order(store: SubmitIntentStore, latest: Path, order: dict[str, object], evidence: dict[str, object]) -> tuple[bool, str]:
+    client_order_id = str(order["client_order_id"])
+    try:
+        store.transition(client_order_id, "BROKER_CONFIRMED", evidence={"event": "broker_confirmed", "broker_order_id": evidence["broker_order_id"]})
+        append_order_to_ledger(
+            latest_dir=latest,
+            client_order_id=client_order_id,
+            broker_order_id=str(evidence["broker_order_id"]),
+            symbol=str(order["symbol"]),
+            side=str(order["side"]),
+            notional=float(evidence["notional"]),
+            qty=float(evidence["qty"]),
+            status=str(evidence["status"]),
+            readback_status="PASS",
+            broker_position_match=False,
+            filled_qty=float(evidence["filled_qty"]),
+        )
+        store.transition(client_order_id, "LEDGER_COMMITTED", evidence={"event": "ledger_committed", "broker_order_id": evidence["broker_order_id"]})
+        return True, "ledger_committed"
+    except Exception as error:
+        try:
+            store.transition(client_order_id, "AMBIGUOUS_RESULT", evidence={"event": "ledger_append_failed", "reason": _sanitize_error(error)})
+        except SubmitIntentError:
+            pass
+        return False, f"ledger_append_failed:{_sanitize_error(error)}"
 
 
 def build_alpaca_paper_submit_one(
@@ -207,38 +313,83 @@ def build_alpaca_paper_submit_one(
     readback_status = "NOT_ATTEMPTED"
     broker_order_id = ""
 
+    payload = _order_payload(preview.iloc[0]) if not preview.empty else {}
     if gates_pass:
-        row = preview.iloc[0]
-        payload = _order_payload(row)
         client = submit_client or AlpacaPaperOrderSubmitClient(api_key=api_key, secret_key=secret_key, base_url=base_url)
+        store = SubmitIntentStore(latest)
+        client_order_id = str(payload["client_order_id"])
         try:
-            submit_order_called = True
-            post_request_used = True
-            response = client.post_order(payload)
-            readback_attempted = True
-            readback_ok, readback_payload, readback_reason = _readback(client, payload["client_order_id"])
-            if readback_ok:
-                submit_status = "SUBMITTED_READBACK_OK"
-                submit_reason = "api_submit_success_readback_ok"
-                readback_status = "PASS"
-                broker_order_id = str((readback_payload or response or {}).get("id", ""))
+            durable = find_order_by_client_order_id(latest, client_order_id)
+            if durable is not None:
+                submit_status = "DUPLICATE_DURABLE_LEDGER"
+                submit_reason = "durable_client_order_id_exists"
+                broker_order_id = str(durable.get("broker_order_id", ""))
             else:
-                submit_status = "SUBMITTED_READBACK_WARNING"
-                submit_reason = f"readback_failed:{readback_reason}"
-                readback_status = "WARNING"
-                broker_order_id = str((response or {}).get("id", ""))
-        except (TimeoutError, socket.timeout, urllib.error.URLError) as error:
-            readback_attempted = True
-            readback_ok, readback_payload, readback_reason = _readback(client, payload["client_order_id"])
-            submit_status = "UNKNOWN_RESULT_READBACK_OK" if readback_ok else "UNKNOWN_RESULT_READBACK_FAILED"
-            submit_reason = f"submit_unknown_no_retry:{_sanitize_error(error)}"
-            readback_status = "PASS" if readback_ok else f"FAIL:{readback_reason}"
-            broker_order_id = str((readback_payload or {}).get("id", ""))
-        except Exception as error:
-            submit_status = "SUBMIT_FAILED"
+                existing = store.get(client_order_id)
+                lookup_state, evidence, lookup_reason = _lookup_broker(client, payload)
+                readback_attempted = True
+                readback_status = "PASS" if lookup_state == "CONFIRMED" else lookup_state
+                if lookup_state == "CONFIRMED":
+                    if existing is None:
+                        store.prepare({**payload, "endpoint": f"{str(base_url).rstrip('/')}/v2/orders"})
+                    broker_order_id = str(evidence["broker_order_id"])
+                    committed, commit_reason = _commit_confirmed_order(store, latest, payload, evidence)
+                    submit_status = "BROKER_CONFIRMED_LEDGER_COMMITTED" if committed else "AMBIGUOUS_RESULT"
+                    submit_reason = commit_reason
+                elif lookup_state == "UNCERTAIN":
+                    submit_status = "BLOCKED_BROKER_LOOKUP"
+                    submit_reason = lookup_reason
+                    if existing is not None:
+                        store.transition(client_order_id, "BLOCKED", evidence={"event": "uncertain_get", "reason": lookup_reason})
+                elif existing is not None and str(existing["recovery_state"]) in {"AMBIGUOUS_RESULT", "POST_IN_PROGRESS", "BROKER_CONFIRMED", "LEDGER_COMMITTED", "BLOCKED"}:
+                    submit_status = "BLOCKED_AMBIGUOUS_RECOVERY"
+                    submit_reason = f"unresolved_intent:{existing['recovery_state']}"
+                else:
+                    if existing is None:
+                        store.prepare({**payload, "endpoint": f"{str(base_url).rstrip('/')}/v2/orders"})
+                    store.transition(client_order_id, "POST_IN_PROGRESS", evidence={"event": "post_started"})
+                    try:
+                        submit_order_called = True
+                        post_request_used = True
+                        response = client.post_order(payload)
+                    except Exception as error:
+                        submit_reason = f"post_unknown_no_retry:{_sanitize_error(error)}"
+                        lookup_state, evidence, lookup_reason = _lookup_broker(client, payload)
+                        readback_attempted = True
+                        readback_status = "PASS" if lookup_state == "CONFIRMED" else lookup_state
+                        if lookup_state == "CONFIRMED":
+                            broker_order_id = str(evidence["broker_order_id"])
+                            committed, commit_reason = _commit_confirmed_order(store, latest, payload, evidence)
+                            submit_status = "BROKER_CONFIRMED_LEDGER_COMMITTED" if committed else "AMBIGUOUS_RESULT"
+                            submit_reason = commit_reason if committed else submit_reason + ";" + commit_reason
+                        else:
+                            store.transition(client_order_id, "AMBIGUOUS_RESULT", evidence={"event": "post_exception", "reason": submit_reason, "readback": lookup_reason})
+                            submit_status = "AMBIGUOUS_RESULT"
+                    else:
+                        if (
+                            not isinstance(response, dict)
+                            or not str(response.get("id", response.get("broker_order_id", ""))).strip()
+                            or str(response.get("client_order_id", "")).strip() != client_order_id
+                        ):
+                            store.transition(client_order_id, "POST_IN_PROGRESS", evidence={"event": "malformed_post_response"})
+                        lookup_state, evidence, lookup_reason = _lookup_broker(client, payload)
+                        readback_attempted = True
+                        readback_status = "PASS" if lookup_state == "CONFIRMED" else lookup_state
+                        if lookup_state == "CONFIRMED":
+                            broker_order_id = str(evidence["broker_order_id"])
+                            committed, commit_reason = _commit_confirmed_order(store, latest, payload, evidence)
+                            submit_status = "SUBMITTED_READBACK_OK" if committed else "AMBIGUOUS_RESULT"
+                            submit_reason = "api_submit_success_readback_ok" if committed else commit_reason
+                        else:
+                            store.transition(client_order_id, "AMBIGUOUS_RESULT", evidence={"event": "post_success_readback_failed", "reason": lookup_reason})
+                            submit_status = "AMBIGUOUS_RESULT"
+                            submit_reason = f"post_success_readback_failed:{lookup_reason}"
+        except SubmitIntentError as error:
+            submit_status = "BLOCKED_INTENT_JOURNAL"
             submit_reason = _sanitize_error(error)
-    else:
-        payload = _order_payload(preview.iloc[0]) if not preview.empty else {}
+        except Exception as error:
+            submit_status = "BLOCKED_DURABLE_STATE"
+            submit_reason = _sanitize_error(error)
 
     audit = pd.DataFrame(
         [
@@ -268,7 +419,7 @@ def build_alpaca_paper_submit_one(
             "readback_attempted": readback_attempted,
             "readback_status": readback_status,
             "submitted_count": 1 if submit_status == "SUBMITTED_READBACK_OK" else 0,
-            "state_mutated": False,
+            "state_mutated": bool(gates_pass and (submit_order_called or submit_status in {"BROKER_CONFIRMED_LEDGER_COMMITTED", "AMBIGUOUS_RESULT"})),
         }
     )
     return {"summary": summary, "checks": checks, "client_order_preview": preview, "audit": audit}
