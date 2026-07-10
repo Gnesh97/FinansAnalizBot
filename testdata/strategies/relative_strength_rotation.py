@@ -3,8 +3,12 @@ import pandas as pd
 
 try:
     from ..diagnostics import _zero_trade_metrics
+    from .cost_model import calculate_max_shares, calculate_transaction_costs
+    from .liquidity_filter import evaluate_entry_liquidity, liquidity_skip_summary
 except ImportError:
     from diagnostics import _zero_trade_metrics
+    from strategies.cost_model import calculate_max_shares, calculate_transaction_costs
+    from strategies.liquidity_filter import evaluate_entry_liquidity, liquidity_skip_summary
 
 
 STRATEGY_CACHE_VERSION = "pure_mr_rsi10_bblower_sma50_riskoff_atr2_stop2_timestop10_calendar_v6"
@@ -54,6 +58,7 @@ def _normalize_relative_strength_params(config):
         ),
         "rs_min_price": float(config.get("rs_min_price", 10)),
         "rs_max_atr_pct": float(config.get("rs_max_atr_pct", 12)),
+        "min_dollar_volume": float(config.get("min_dollar_volume", 0.0) or 0.0),
     }
     for key in [
         "rs_lookback_days",
@@ -68,6 +73,11 @@ def _normalize_relative_strength_params(config):
         raise ValueError("rs_min_price negatif olamaz.")
     if params["rs_max_atr_pct"] <= 0:
         raise ValueError("rs_max_atr_pct 0'dan buyuk olmali.")
+    if params["min_dollar_volume"] < 0:
+        raise ValueError("min_dollar_volume negatif olamaz.")
+    for key in ["commission_per_share", "slippage_bps", "min_commission"]:
+        if key in config:
+            params[key] = config[key]
     return params
 
 
@@ -309,6 +319,10 @@ def _relative_strength_daily_features(asset_data, params):
             {
                 "Open": daily["Open"],
                 "Close": daily["Close"],
+                "Avg_Dollar_Volume": daily["Close"] * daily.get("Volume", pd.Series(index=daily.index, dtype=float)),
+                "Signal_Avg_Dollar_Volume": (
+                    daily["Close"] * daily.get("Volume", pd.Series(index=daily.index, dtype=float))
+                ).shift(1),
                 "ATR_Pct": atr_pct,
                 "RS_Trend_SMA": trend_sma,
                 "RS_Score": score.replace([np.inf, -np.inf], np.nan),
@@ -532,6 +546,8 @@ def _run_relative_strength_rotation_backtest(asset_data, params, benchmark_data=
     equity_curve = []
     position_count_curve = []
     pending_target = None
+    pending_target_signal_date = None
+    liquidity_skips = []
     max_open_observed = 0
     max_heat_observed = 0.0
 
@@ -551,10 +567,14 @@ def _run_relative_strength_rotation_backtest(asset_data, params, benchmark_data=
     def _close(symbol, date, price, reason):
         nonlocal cash
         position = positions.pop(symbol)
-        proceeds = position["shares"] * price
+        gross_proceeds = position["shares"] * price
+        costs = calculate_transaction_costs(gross_proceeds, position["shares"], rs_params)
+        exit_cost = costs["total_cost"]
+        proceeds = gross_proceeds - exit_cost
         cash += proceeds
-        pnl = proceeds - position["entry_notional"]
+        pnl = proceeds - (position["entry_notional"] + position["entry_cost"])
         r_multiple = pnl / position["entry_notional"] if position["entry_notional"] > 0 else np.nan
+        total_trade_costs = position["entry_cost"] + exit_cost
         trade_log.append(
             {
                 "Symbol": symbol,
@@ -570,6 +590,11 @@ def _run_relative_strength_rotation_backtest(asset_data, params, benchmark_data=
                 "Exit Price": price,
                 "Shares": position["shares"],
                 "Entry Notional": position["entry_notional"],
+                "gross_notional": round(position["entry_notional"] + gross_proceeds, 2),
+                "transaction_cost": round(total_trade_costs, 4),
+                "slippage_cost": round(position["entry_slippage"] + costs["slippage_cost"], 4),
+                "commission_cost": round(position["entry_commission"] + costs["commission_cost"], 4),
+                "net_cash_effect": round(pnl, 2),
             }
         )
 
@@ -592,23 +617,44 @@ def _run_relative_strength_rotation_backtest(asset_data, params, benchmark_data=
                 frame = features.get(symbol)
                 if frame is None or date not in frame.index:
                     continue
+                signal_date = pending_target_signal_date
+                signal_row = (
+                    frame.loc[signal_date]
+                    if signal_date is not None and signal_date in frame.index
+                    else None
+                )
+                liquidity_result = evaluate_entry_liquidity(
+                    symbol,
+                    signal_date,
+                    signal_row,
+                    rs_params["min_dollar_volume"],
+                )
+                if not liquidity_result["passed"]:
+                    liquidity_skips.append(liquidity_result)
+                    continue
                 price = frame.loc[date, "Open"]
                 if pd.isna(price) or price <= 0:
                     continue
-                notional = min(cash, target_notional)
-                if notional <= 0:
+                shares = calculate_max_shares(target_notional, price, cash, rs_params)
+                if shares <= 0:
                     continue
-                shares = notional / float(price)
-                cash -= shares * float(price)
+                gross_entry_notional = shares * price
+                entry_costs = calculate_transaction_costs(gross_entry_notional, shares, rs_params)
+                total_entry_cost = entry_costs["total_cost"]
+                cash -= (gross_entry_notional + total_entry_cost)
                 positions[symbol] = {
                     "entry_time": date,
                     "entry_price": float(price),
-                    "entry_notional": shares * float(price),
+                    "entry_notional": gross_entry_notional,
                     "shares": shares,
                     "bars_held": 0,
                     "last_price": float(price),
+                    "entry_commission": entry_costs["commission_cost"],
+                    "entry_slippage": entry_costs["slippage_cost"],
+                    "entry_cost": total_entry_cost,
                 }
             pending_target = None
+            pending_target_signal_date = None
 
         close_equity = _equity_at(date, "Close")
         for position in positions.values():
@@ -626,6 +672,7 @@ def _run_relative_strength_rotation_backtest(asset_data, params, benchmark_data=
         equity_curve.append((date, close_equity))
         if date in selections:
             pending_target = selections[date] if bool(regime.loc[date]) else set()
+            pending_target_signal_date = date
 
     final_date = all_dates[-1]
     for symbol in list(positions):
@@ -646,8 +693,10 @@ def _run_relative_strength_rotation_backtest(asset_data, params, benchmark_data=
         max_heat_observed=max_heat_observed,
         position_count_curve=position_count_curve,
     )
+    metrics.update(liquidity_skip_summary(liquidity_skips, rs_params["min_dollar_volume"]))
     metrics["_trade_log"] = trade_log
     metrics["_equity_curve"] = equity_curve
+    metrics["_liquidity_skipped_entries"] = liquidity_skips
     return metrics
 
 

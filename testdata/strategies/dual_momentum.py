@@ -11,6 +11,8 @@ try:
         safe_bool_series,
         _strategy_cache_config,
     )
+    from .cost_model import calculate_max_shares, calculate_transaction_costs
+    from .liquidity_filter import evaluate_entry_liquidity, liquidity_skip_summary
 except ImportError:
     from strategies.rotation_utils import (
         _atr_from_ohlc,
@@ -21,6 +23,8 @@ except ImportError:
         safe_bool_series,
         _strategy_cache_config,
     )
+    from strategies.cost_model import calculate_max_shares, calculate_transaction_costs
+    from strategies.liquidity_filter import evaluate_entry_liquidity, liquidity_skip_summary
 
 
 def _normalize_dual_momentum_params(config):
@@ -41,6 +45,7 @@ def _normalize_dual_momentum_params(config):
         ),
         "dm_min_price": float(config.get("dm_min_price", 10)),
         "dm_max_atr_pct": float(config.get("dm_max_atr_pct", 12)),
+        "min_dollar_volume": float(config.get("min_dollar_volume", 0.0) or 0.0),
     }
     for key in [
         "dm_lookback_days",
@@ -54,6 +59,11 @@ def _normalize_dual_momentum_params(config):
         raise ValueError("dm_min_price negatif olamaz.")
     if params["dm_max_atr_pct"] <= 0:
         raise ValueError("dm_max_atr_pct 0'dan buyuk olmali.")
+    if params["min_dollar_volume"] < 0:
+        raise ValueError("min_dollar_volume negatif olamaz.")
+    for key in ["commission_per_share", "slippage_bps", "min_commission"]:
+        if key in config:
+            params[key] = config[key]
     return params
 
 
@@ -146,8 +156,11 @@ def generate_dual_momentum_signals(df, config):
         "EXIT_SIGNAL",
     ]:
         frame[column] = frame[column].fillna(False).astype(bool)
+    cache_params = {
+        key: value for key, value in params.items() if key != "min_dollar_volume"
+    }
     frame.attrs.update(
-        _strategy_cache_config("off", 0.5, strategy_name="dual_momentum", **params)
+        _strategy_cache_config("off", 0.5, strategy_name="dual_momentum", **cache_params)
     )
     return frame
 
@@ -181,6 +194,9 @@ def _dual_momentum_daily_features(asset_data, params):
         daily_features = pd.DataFrame(index=daily.index)
         daily_features["Open"] = daily["Open"]
         daily_features["Close"] = daily["Close"]
+        dollar_volume = daily["Close"] * daily.get("Volume", pd.Series(index=daily.index, dtype=float))
+        daily_features["Avg_Dollar_Volume"] = dollar_volume
+        daily_features["Signal_Avg_Dollar_Volume"] = dollar_volume.shift(1)
         daily_features["DM_Score"] = clean_score
         daily_features["DM_Eligible"] = eligible.fillna(False).astype(bool)
         features[symbol] = daily_features
@@ -287,6 +303,8 @@ def _run_dual_momentum_backtest(asset_data, params, benchmark_data=None):
     equity_curve = []
     position_count_curve = []
     pending_target = None
+    pending_target_signal_date = None
+    liquidity_skips = []
     max_open_observed = 0
     max_heat_observed = 0.0
 
@@ -306,10 +324,14 @@ def _run_dual_momentum_backtest(asset_data, params, benchmark_data=None):
     def _close(symbol, date, price, reason):
         nonlocal cash
         position = positions.pop(symbol)
-        proceeds = position["shares"] * price
+        gross_proceeds = position["shares"] * price
+        costs = calculate_transaction_costs(gross_proceeds, position["shares"], dm_params)
+        exit_cost = costs["total_cost"]
+        proceeds = gross_proceeds - exit_cost
         cash += proceeds
-        pnl = proceeds - position["entry_notional"]
+        pnl = proceeds - (position["entry_notional"] + position["entry_cost"])
         r_multiple = pnl / position["entry_notional"] if position["entry_notional"] > 0 else np.nan
+        total_trade_costs = position["entry_cost"] + exit_cost
         trade_log.append(
             {
                 "Symbol": symbol,
@@ -325,6 +347,11 @@ def _run_dual_momentum_backtest(asset_data, params, benchmark_data=None):
                 "Exit Price": price,
                 "Shares": position["shares"],
                 "Entry Notional": position["entry_notional"],
+                "gross_notional": round(position["entry_notional"] + gross_proceeds, 2),
+                "transaction_cost": round(total_trade_costs, 4),
+                "slippage_cost": round(position["entry_slippage"] + costs["slippage_cost"], 4),
+                "commission_cost": round(position["entry_commission"] + costs["commission_cost"], 4),
+                "net_cash_effect": round(pnl, 2),
             }
         )
 
@@ -347,23 +374,44 @@ def _run_dual_momentum_backtest(asset_data, params, benchmark_data=None):
                 frame = features.get(symbol)
                 if frame is None or date not in frame.index:
                     continue
+                signal_date = pending_target_signal_date
+                signal_row = (
+                    frame.loc[signal_date]
+                    if signal_date is not None and signal_date in frame.index
+                    else None
+                )
+                liquidity_result = evaluate_entry_liquidity(
+                    symbol,
+                    signal_date,
+                    signal_row,
+                    dm_params["min_dollar_volume"],
+                )
+                if not liquidity_result["passed"]:
+                    liquidity_skips.append(liquidity_result)
+                    continue
                 price = frame.loc[date, "Open"]
                 if pd.isna(price) or price <= 0:
                     continue
-                notional = min(cash, target_notional)
-                if notional <= 0:
+                shares = calculate_max_shares(target_notional, price, cash, dm_params)
+                if shares <= 0:
                     continue
-                shares = notional / float(price)
-                cash -= shares * float(price)
+                gross_entry_notional = shares * price
+                entry_costs = calculate_transaction_costs(gross_entry_notional, shares, dm_params)
+                total_entry_cost = entry_costs["total_cost"]
+                cash -= (gross_entry_notional + total_entry_cost)
                 positions[symbol] = {
                     "entry_time": date,
                     "entry_price": float(price),
                     "shares": shares,
-                    "entry_notional": notional,
+                    "entry_notional": gross_entry_notional,
                     "bars_held": 0,
                     "last_price": float(price),
+                    "entry_commission": entry_costs["commission_cost"],
+                    "entry_slippage": entry_costs["slippage_cost"],
+                    "entry_cost": total_entry_cost,
                 }
             pending_target = None
+            pending_target_signal_date = None
 
         for symbol in list(positions):
             frame = features.get(symbol)
@@ -389,6 +437,7 @@ def _run_dual_momentum_backtest(asset_data, params, benchmark_data=None):
             current_symbols = set(positions.keys())
             if selected != current_symbols:
                 pending_target = selected
+                pending_target_signal_date = date
 
     last_date = all_dates[-1] if not all_dates.empty else None
     if last_date:
@@ -407,6 +456,8 @@ def _run_dual_momentum_backtest(asset_data, params, benchmark_data=None):
         max_heat_observed=max_heat_observed,
         position_count_curve=position_count_curve,
     )
+    metrics.update(liquidity_skip_summary(liquidity_skips, dm_params["min_dollar_volume"]))
     metrics["_trade_log"] = trade_log
     metrics["_equity_curve"] = equity_curve
+    metrics["_liquidity_skipped_entries"] = liquidity_skips
     return metrics
