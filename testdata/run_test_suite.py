@@ -40,6 +40,8 @@ COMPILE_TARGETS = [
     "testdata/vericekici_updated.py",
     "testdata/broker_ledger.py",
     "testdata/broker_lifecycle.py",
+    "testdata/delisted_security_metadata.py",
+    "testdata/delisted_alpaca_price_coverage.py",
 ]
 
 
