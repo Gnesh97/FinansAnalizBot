@@ -187,9 +187,14 @@ def _approved_internal_session_exception_dates(exceptions: Iterable[dict], symbo
     return approved
 
 
-def _expected_intraday_starts(schedule: pd.DataFrame) -> pd.DatetimeIndex:
+def _expected_intraday_starts(schedule: pd.DataFrame, approved_internal_dates: set[pd.Timestamp] = None) -> pd.DatetimeIndex:
+    if approved_internal_dates is None:
+        approved_internal_dates = set()
     values = []
     for _, row in schedule.iterrows():
+        session_ts = pd.Timestamp(row.name).normalize()
+        if session_ts in approved_internal_dates:
+            continue
         current = pd.Timestamp(row["market_open"])
         close = pd.Timestamp(row["market_close"])
         while current < close:
@@ -265,7 +270,7 @@ def calculate_v2_session_coverage(
     duplicate_intraday = int(valid_timestamps.duplicated().sum()) if timeframe == "130min" else 0
     warmup = daily_count >= WARMUP_DAILY_OBSERVATIONS if timeframe == "1D" else intraday_count > 0
     intraday_bar_count = len(valid_timestamps) if timeframe == "130min" else 0
-    expected_intraday = _expected_intraday_starts(effective_schedule) if timeframe == "130min" else pd.DatetimeIndex([])
+    expected_intraday = _expected_intraday_starts(effective_schedule, approved_internal_dates) if timeframe == "130min" else pd.DatetimeIndex([])
     expected_intraday_set = set(expected_intraday)
     actual_timestamp_set = set(valid_timestamps)
     missing_intraday = len(expected_intraday_set - actual_timestamp_set) if timeframe == "130min" else 0

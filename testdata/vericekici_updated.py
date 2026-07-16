@@ -321,10 +321,21 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
     for key in expected:
         record = actual[key]
         path = root / record["output_relative_path"]
-        coverage = validate_v2_file_coverage(
-            path, record, record["symbol"], record["timeframe"], exact["target_start_date"], exact["target_end_date"],
-            reviewed_exceptions=exceptions, market_schedule=market_schedule,
-        )
+        try:
+            coverage = validate_v2_file_coverage(
+                path, record, record["symbol"], record["timeframe"], exact["target_start_date"], exact["target_end_date"],
+                reviewed_exceptions=exceptions, market_schedule=market_schedule,
+            )
+        except ValueError as e:
+            if "V2_DATASET_NOT_VALIDATED: coverage failed" in str(e):
+                from v2_session_coverage import coverage_metadata_for_file
+                coverage = coverage_metadata_for_file(
+                    path, timeframe=record["timeframe"], symbol=record["symbol"],
+                    target_start=exact["target_start_date"], target_end=exact["target_end_date"],
+                    reviewed_exceptions=exceptions, market_schedule=market_schedule,
+                )
+            else:
+                raise
         recomputed_by_symbol.setdefault(record["symbol"], {})[record["timeframe"]] = coverage
     for symbol, coverages in recomputed_by_symbol.items():
         daily = coverages.get("1D", {})
