@@ -1,0 +1,55 @@
+{
+  "backtest_dates": {
+    "end": "2026-07-07 00:00:00-04:00",
+    "source": "relative_strength_equity_curve",
+    "start": "2018-01-02 00:00:00-05:00"
+  },
+  "baseline_schema_version": "1.0.0",
+  "benchmark": {
+    "excluded_symbols": [
+      "QQQ",
+      "SPY"
+    ],
+    "secondary": "EqualWeight Universe BuyHold",
+    "symbol": "QQQ"
+  },
+  "benchmark_config_hash": "2381df056d7316ffea8583ad48f658b2b8c41dbb28657e6ab0ef5e2f3a0ba955",
+  "execution": {
+    "broker_submit_enabled": false,
+    "data_frequency": {
+      "daily": "1D",
+      "intraday": "130min"
+    },
+    "execution_mode": "bar_close",
+    "position_sizing": "equal_weight_top_n",
+    "short_trading_enabled": false,
+    "transaction_cost_configuration": "runner_default_no_explicit_cost_override"
+  },
+  "execution_config_hash": "6a7d7615007d84b75e5d716bff447ba12a020c59fda43d523f6ec7d35f2fc873",
+  "generated_at": "2026-07-11T14:00:09.579555+00:00",
+  "liquidity": {
+    "max_atr_pct": 12,
+    "min_dollar_volume": 0.0
+  },
+  "source_commit_hash": "f2f9fcb56ad3d6b7deaa7c99814caa5c28512f91",
+  "strategy": {
+    "market_regime_sma_days": 200,
+    "momentum_lookback_days": 126,
+    "rebalance_frequency": "monthly",
+    "score_mode": "return_over_vol",
+    "sma_filter_days": 100,
+    "strategy_name": "relative_strength_rotation",
+    "top_n": 30,
+    "use_market_regime": false,
+    "volatility_lookback_days": 60
+  },
+  "strategy_config_hash": "a15ca725cf97da34479963745f8745536b09a66fdb4c0e7479cbea44d252aeca",
+  "strategy_identifier": "rs_m126_top30_sma100_no_regime",
+  "universe": {
+    "excluded_symbols": [
+      "QQQ",
+      "SPY"
+    ],
+    "min_price": 10
+  }
+}

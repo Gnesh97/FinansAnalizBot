@@ -349,6 +349,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use explicit GET-only Alpaca paper snapshot for broker reconciliation; disabled by default.",
     )
+    parser.add_argument(
+        "--experiment",
+        default=None,
+        help="Specify a single experiment to run by name; V2 is not run by default."
+    )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)
     data_folder = Path(__file__).resolve().parent / "hisseler"
@@ -430,9 +435,39 @@ if __name__ == "__main__":
     if args.create_broker_cutover_baseline:
         run_create_broker_cutover_baseline(str(data_folder))
         raise SystemExit(0)
+    experiments_to_run = VALIDATION_EXPERIMENTS
+    if args.experiment:
+        if args.experiment == "rs_m126_top30_sma100_no_regime_v2_clean_stock":
+            experiments_to_run = [{
+                "name": "rs_m126_top30_sma100_no_regime_v2_clean_stock",
+                "strategy_name": "relative_strength_rotation",
+                "excluded_symbols": [
+                    "DIA", "IBB", "IWM", "QQQ", "RSP", "SMH", "SOXX", "SPY", "VTI", "XBI",
+                    "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV",
+                    "XLY", "XRT"
+                ],
+                "rs_lookback_days": 126,
+                "rs_top_n": 30,
+                "rs_rebalance_frequency": "monthly",
+                "rs_score_mode": "return_over_vol",
+                "rs_vol_lookback_days": 60,
+                "rs_trend_sma_days": 100,
+                "rs_use_market_regime": False,
+                "rs_market_regime_sma_days": 200,
+                "rs_min_price": 10,
+                "rs_max_atr_pct": 12,
+                "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock"
+            }]
+            data_folder = Path(__file__).resolve().parent / "research_data" / "rs_v2_clean_market_data"
+        else:
+            matched = [exp for exp in VALIDATION_EXPERIMENTS if exp["name"] == args.experiment]
+            if not matched:
+                raise ValueError(f"Experiment {args.experiment} not found in VALIDATION_EXPERIMENTS.")
+            experiments_to_run = matched
+
     run_strategy_experiments(
         str(data_folder),
-        experiments=VALIDATION_EXPERIMENTS,
+        experiments=experiments_to_run,
         run_profile="fast",
         quick_mode=True,
         compact_report=True,

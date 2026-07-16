@@ -359,7 +359,23 @@ def _relative_strength_regime(asset_data, benchmark_data, params, index):
 
 
 def _relative_strength_selection(asset_data, params, benchmark_data=None):
+    is_v2 = (params.get("strategy_identifier") == "rs_m126_top30_sma100_no_regime_v2_clean_stock")
+    blocked_etfs = {
+        "DIA", "IBB", "IWM", "QQQ", "RSP", "SMH", "SOXX", "SPY", "VTI", "XBI",
+        "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV",
+        "XLY", "XRT"
+    }
+    if is_v2:
+        for symbol in asset_data:
+            if symbol in blocked_etfs:
+                raise ValueError(f"Blocked ETF {symbol} found in candidate universe for V2 clean stock!")
+
     features = _relative_strength_daily_features(asset_data, params)
+    if is_v2:
+        for symbol in features:
+            if symbol in blocked_etfs:
+                raise ValueError(f"Blocked ETF {symbol} found in features universe for V2 clean stock!")
+
     all_dates = pd.DatetimeIndex(
         sorted(set().union(*(frame.index for frame in features.values())))
     )
@@ -383,6 +399,10 @@ def _relative_strength_selection(asset_data, params, benchmark_data=None):
                 rows.append((symbol, float(row["RS_Score"])))
         rows.sort(key=lambda item: item[1], reverse=True)
         selections[date] = {symbol for symbol, _ in rows[: params["rs_top_n"]]}
+        if is_v2:
+            for s in selections[date]:
+                if s in blocked_etfs:
+                    raise ValueError(f"Blocked ETF {s} found in V2 selection on {date}!")
     return features, selections, regime, rebalance
 
 
