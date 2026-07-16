@@ -72,6 +72,7 @@ try:
     from .alpaca_submit_readiness import write_alpaca_paper_submit_readiness
     from .alpaca_paper_submit_one import write_alpaca_paper_submit_one
     from .execution_engine import run_execution_preview
+    from .baseline_parity import archive_new_paper_decision_events
     from .strategies.base import generate_strategy_signals
     from .strategies.cross_sectional_momentum import (
         _apply_cross_sectional_momentum_top_signals,
@@ -158,6 +159,7 @@ except ImportError:
     from alpaca_submit_readiness import write_alpaca_paper_submit_readiness
     from alpaca_paper_submit_one import write_alpaca_paper_submit_one
     from execution_engine import run_execution_preview
+    from baseline_parity import archive_new_paper_decision_events
     from strategies.base import generate_strategy_signals
     from strategies.cross_sectional_momentum import (
         _apply_cross_sectional_momentum_top_signals,
@@ -401,16 +403,16 @@ def _write_alpaca_order_preview(latest_dir, output_path):
             decision = str(row.get("user_decision", "REVIEW_REQUIRED")).strip().upper()
             if decision == "REVIEW_REQUIRED":
                 decision = decisions.get(key, decision)
-            
+
             fill_status = str(row.get("fill_status", "")).strip().upper()
             signal = None
             if not fill_status:
                 signal = signal_lookup.get(key)
                 fill_status = str(signal.get("fill_status", "")).strip().upper() if signal is not None else ""
-                
+
             if decision != "ACCEPT" or fill_status != "PENDING_NEXT_OPEN":
                 continue
-                
+
             price = pd.to_numeric(
                 pd.Series([row.get("entry_price_reference", pd.NA)]),
                 errors="coerce",
@@ -1194,14 +1196,14 @@ def _write_raw_5min_update_audit_report(data_folder, latest_dir, pending_orders)
     for symbol in pending_symbols:
         raw_path = data_path / "raw_5min" / f"{symbol}_5min.csv"
         latest_date = _raw_5min_latest_date(raw_path)
-        
+
         symbol_orders = pending_orders[pending_orders.get("symbol", pd.Series(dtype=str)).astype(str).str.upper().eq(symbol)]
         target_date_str = None
         if not symbol_orders.empty:
             target_date_val = _paper_fill_target_date(symbol_orders.iloc[0])
             if target_date_val is not None:
                 target_date_str = str(target_date_val)
-        
+
         same_day_rows = _raw_5min_same_day_row_count(raw_path, target_date=target_date_str)
         same_day_rows_received_count += same_day_rows
         reason = ""
@@ -1739,16 +1741,17 @@ def _load_or_build_prepared_cache(
 
 
 def _load_daily_benchmark(daily_dir, start_date=None, end_date=None):
-    for symbol in ["QQQ", "SPY"]:
-        path = daily_dir / f"{symbol}_1D.csv"
-        if not path.exists():
-            continue
-        frame = _slice_frame(_normalize_frame(path), start_date, end_date)
-        if frame.empty:
-            continue
-        frame.attrs["benchmark_symbol"] = symbol
-        frame.attrs["daily_data_dir"] = str(daily_dir)
-        return frame
+    for folder in [Path(daily_dir), Path(daily_dir).parent / "benchmarks" / "daily"]:
+        for symbol in ["QQQ", "SPY"]:
+            path = folder / f"{symbol}_1D.csv"
+            if not path.exists():
+                continue
+            frame = _slice_frame(_normalize_frame(path), start_date, end_date)
+            if frame.empty:
+                continue
+            frame.attrs["benchmark_symbol"] = symbol
+            frame.attrs["daily_data_dir"] = str(daily_dir)
+            return frame
     return None
 
 
@@ -4851,14 +4854,14 @@ def _write_daily_preflight_report(status, path):
 def _write_paper_ledger_audit_report(latest_dir, db_path, daily_pipeline_status):
     import sqlite3
     trade_log_path = Path(latest_dir) / "paper_trade_log.csv"
-    
+
     official_trade_log_rows = 0
     unique_filled_trade_count = 0
     duplicate_filled_trade_count = 0
     duplicate_keys_list = []
     current_open_position_count = 0
     current_open_symbols_list = []
-    
+
     if trade_log_path.exists():
         try:
             trade_log = pd.read_csv(trade_log_path)
@@ -4877,7 +4880,7 @@ def _write_paper_ledger_audit_report(latest_dir, db_path, daily_pipeline_status)
                     seen.add(k)
                 duplicate_filled_trade_count = len(trade_log) - len(unique_keys)
                 duplicate_keys_list = [f"{d[0]}:{d[1]}:{d[2]}:{d[3]}" for d in dups]
-                
+
                 open_positions = net_open_positions_from_trade_log(trade_log)
                 current_open_symbols_list = sorted(open_positions["symbol"].dropna().unique().tolist())
                 current_open_position_count = len(current_open_symbols_list)
@@ -4887,7 +4890,7 @@ def _write_paper_ledger_audit_report(latest_dir, db_path, daily_pipeline_status)
     sqlite_unique_paper_trades_count = 0
     sqlite_duplicate_paper_trades_count = 0
     sqlite_status = "OK"
-    
+
     conn = None
     if Path(db_path).exists():
         try:
@@ -4916,13 +4919,13 @@ def _write_paper_ledger_audit_report(latest_dir, db_path, daily_pipeline_status)
     pending_order_count = daily_pipeline_status.get("pending_order_count", 0)
     accepted_order_count = daily_pipeline_status.get("accepted_order_count", 0)
     hold_review_count = pending_order_count - daily_pipeline_status.get("pending_next_open_count", 0)
-    
+
     filled_count_this_run_reported = daily_pipeline_status.get("filled_count_this_run", 0)
     filled_count_this_run_recomputed = get_last_newly_added_count()
     skipped_duplicate_fill_count = get_last_skipped_duplicate_fill_count()
-    
+
     status = "OK" if duplicate_filled_trade_count == 0 and sqlite_duplicate_paper_trades_count == 0 else "WARNING"
-    
+
     csv_path = Path(latest_dir) / "paper_ledger_audit_report.csv"
     csv_cols = [
         "filled_count_this_run_reported",
@@ -4945,7 +4948,7 @@ def _write_paper_ledger_audit_report(latest_dir, db_path, daily_pipeline_status)
         "paper_ledger_status": status
     }
     pd.DataFrame([csv_row])[csv_cols].to_csv(csv_path, index=False)
-    
+
     md_path = Path(latest_dir) / "paper_ledger_audit_report.md"
     md_content = [
         "# Paper Ledger Audit Report",
@@ -5536,7 +5539,7 @@ def _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir):
             DATA_POLICY_EXCEPTIONS = {}
 
     active_syms = _active_symbols(latest_dir)
-    
+
     # Check PSA repair status against current daily data end date.
     psa_repaired = False
     latest_daily_date = _latest_csv_data_date(daily_dir)
@@ -5557,7 +5560,7 @@ def _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir):
     blocking_decisions = []
     active_blocking_symbols = []
     inactive_exception_symbols = []
-    
+
     safe_exception_count = 0
     redownload_required_count = 0
     manual_review_count = 0
@@ -5578,7 +5581,7 @@ def _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir):
         status_str = str(item.get("policy_status", "")).upper()
         operator_decision = str(item.get("operator_decision", "")).strip().upper()
         operator_note = str(item.get("operator_note", "")).strip()
-        
+
         # Determine categories
         if symbol in {"BK", "PARA"}:
             safe_exception_count += 1
@@ -5597,7 +5600,7 @@ def _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir):
                 if symbol not in active_syms:
                     inactive_exception_symbols.append(symbol)
                     continue  # do not block
-            
+
             if symbol == "PSA":
                 repair_report_file = Path(latest_dir) / "data_policy_repair_report.csv"
                 repair_attempted = repair_report_file.exists()
@@ -5649,7 +5652,7 @@ def _write_run_manifest(
     data_precheck = (operational_health or {}).get("data_precheck", {})
     regression = (operational_health or {}).get("regression_guard", {})
     policy_decisions = data_precheck.get("policy_decisions", []) or []
-    
+
     if not data_precheck:
         data_policy_status = "not_generated"
         blocking_policy_decisions = []
@@ -5711,7 +5714,7 @@ def _chatgpt_operational_health_section(operational_health):
     paper_state = operational_health.get("paper_state_validation", {})
     health = operational_health.get("pipeline_health", {})
     policy_decisions = data_precheck.get("policy_decisions", []) or []
-    
+
     daily_dir = health.get("daily_data_dir", "hisseler/daily")
     latest_dir = health.get("latest_dir", "reports/latest")
     if not data_precheck:
@@ -5724,7 +5727,7 @@ def _chatgpt_operational_health_section(operational_health):
         blocking_policy_decisions = []
     else:
         eval_res = _evaluate_data_policy_status(policy_decisions, latest_dir, daily_dir)
-        
+
         data_policy_status = eval_res["status"]
         safe_known_exception_count = eval_res["safe_known_exception_count"]
         data_redownload_required_count = eval_res["data_redownload_required_count"]
@@ -5732,7 +5735,7 @@ def _chatgpt_operational_health_section(operational_health):
         active_blocking_symbols = eval_res["active_blocking_symbols"]
         inactive_exception_symbols = eval_res["inactive_exception_symbols"]
         blocking_policy_decisions = eval_res["blocking_decisions"]
-    
+
     ret = [
         "## Operational Health",
         "",
@@ -5758,7 +5761,7 @@ def _chatgpt_operational_health_section(operational_health):
         f"- paper_state_validation_status: {paper_state.get('status', 'not_generated')}",
         f"- paper_state_validation_report_path: {paper_state.get('path', 'reports/latest/paper_state_validation_report.md')}",
     ]
-    
+
     sqlite = operational_health.get("sqlite", {})
     if sqlite:
         db_rel_path = "testdata/state/trading_state.sqlite3"
@@ -5772,7 +5775,7 @@ def _chatgpt_operational_health_section(operational_health):
             f"- paper_trades_count: {sqlite.get('paper_trades_count', 0)}",
             f"- execution_audit_count: {sqlite.get('execution_audit_count', 0)}"
         ])
-        
+
     ret.extend([
         f"- next action: {operational_health.get('next_action', 'Review reports/latest/pipeline_health_log.csv.')}",
         "",
@@ -6448,7 +6451,7 @@ def _write_sqlite_state_report(latest_dir, db_path):
             finally:
                 if conn:
                     conn.close()
-        
+
         # Write CSV
         csv_path = latest_dir / "sqlite_state_report.csv"
         csv_lines = ["metric,value"]
@@ -6456,7 +6459,7 @@ def _write_sqlite_state_report(latest_dir, db_path):
             if k != "error_msg":
                 csv_lines.append(f"{k},{v}")
         csv_path.write_text("\n".join(csv_lines), encoding="utf-8")
-        
+
         # Write MD
         md_path = latest_dir / "sqlite_state_report.md"
         md_lines = [
@@ -6478,7 +6481,7 @@ def _write_sqlite_state_report(latest_dir, db_path):
         if summary.get("error_msg"):
             md_lines.extend(["", f"Warning: {summary.get('error_msg')}"])
         md_path.write_text("\n".join(md_lines), encoding="utf-8")
-        
+
         return summary
     except Exception as e:
         print(f"WARNING: _write_sqlite_state_report failed: {e}")
@@ -6833,10 +6836,10 @@ def run_execution_preview_check(data_folder="hisseler", report_output_dir="repor
     # SQLite mirror block
     db_path = resolve_project_path("state/trading_state.sqlite3", data_folder)
     run_id = f"run_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
-    
+
     try:
         init_state_db(str(db_path))
-        
+
         # 1. Pipeline run
         mode_str = "pre-submit-check" if pre_submit_check else "execution-preview"
         append_pipeline_run(
@@ -6851,7 +6854,7 @@ def run_execution_preview_check(data_folder="hisseler", report_output_dir="repor
             regression_guard_status="OK",
             total_runtime_sec=0.0
         )
-        
+
         # 2. Order intents
         intents_path = latest_dir / "order_intents.csv"
         if intents_path.exists():
@@ -6860,7 +6863,7 @@ def run_execution_preview_check(data_folder="hisseler", report_output_dir="repor
                 append_order_intents(str(db_path), run_id, intents_df)
             except Exception as e_int:
                 print(f"WARNING: SQLite append_order_intents failed to read CSV: {e_int}")
-                
+
         # 3. Execution audit
         audit_path = latest_dir / "execution_audit_log.csv"
         if audit_path.exists():
@@ -6869,7 +6872,7 @@ def run_execution_preview_check(data_folder="hisseler", report_output_dir="repor
                 append_execution_audit(str(db_path), run_id, audit_df)
             except Exception as e_aud:
                 print(f"WARNING: SQLite append_execution_audit failed to read CSV: {e_aud}")
-                
+
         # 4. Pre-submit safety checks
         pre_submit_path = latest_dir / "pre_submit_readiness_report.csv"
         if pre_submit_path.exists():
@@ -6878,7 +6881,7 @@ def run_execution_preview_check(data_folder="hisseler", report_output_dir="repor
                 append_pre_submit_checks(str(db_path), run_id, pre_submit_df)
             except Exception as e_pre:
                 print(f"WARNING: SQLite append_pre_submit_checks failed to read CSV: {e_pre}")
-                
+
         # 5. Short readiness checks
         short_path = latest_dir / "short_readiness_report.csv"
         if short_path.exists():
@@ -6887,10 +6890,10 @@ def run_execution_preview_check(data_folder="hisseler", report_output_dir="repor
                 append_short_readiness_checks(str(db_path), run_id, short_df)
             except Exception as e_sh:
                 print(f"WARNING: SQLite append_short_readiness_checks failed to read CSV: {e_sh}")
-                
+
         # Write state report files
         _write_sqlite_state_report(latest_dir, db_path)
-        
+
     except Exception as e_sql:
         print(f"WARNING: SQLite mirror execution failed: {e_sql}")
 
@@ -7554,6 +7557,129 @@ def _write_candidate_summary_report(report, robustness, markdown_path):
     )
 
 
+def validate_v2_clean_dataset(data_folder):
+    import json
+    import hashlib
+    folder = Path(data_folder)
+    latest_manifest = folder / "manifests" / "latest_manifest.json"
+    if not latest_manifest.exists():
+        raise ValueError("V2_DATASET_NOT_VALIDATED: latest_manifest.json is missing")
+
+    try:
+        with open(latest_manifest, "r", encoding="utf-8") as f:
+            latest = json.load(f)
+    except Exception as e:
+        raise ValueError(f"V2_DATASET_NOT_VALIDATED: failed to parse manifest: {e}")
+    relative = latest.get("immutable_manifest_relative_path")
+    if not relative or Path(relative).is_absolute():
+        raise ValueError("V2_DATASET_NOT_VALIDATED: latest manifest is not immutable pointer")
+    immutable_path = folder / relative
+    if not immutable_path.exists():
+        raise ValueError("V2_DATASET_NOT_VALIDATED: immutable run manifest is missing")
+    actual_manifest_hash = hashlib.sha256(immutable_path.read_bytes()).hexdigest()
+    if latest.get("immutable_manifest_sha256") != actual_manifest_hash:
+        raise ValueError("V2_DATASET_NOT_VALIDATED: immutable manifest SHA-256 mismatch")
+    try:
+        manifest = json.loads(immutable_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise ValueError(f"V2_DATASET_NOT_VALIDATED: immutable manifest parse failed: {e}")
+    if latest.get("acquisition_run_id") != manifest.get("acquisition_run_id"):
+        raise ValueError("V2_DATASET_NOT_VALIDATED: acquisition run id mismatch")
+    try:
+        try:
+            from .vericekici_updated import validate_v2_manifest_and_files
+        except ImportError:
+            from vericekici_updated import validate_v2_manifest_and_files
+        validate_v2_manifest_and_files(folder, manifest)
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"V2_DATASET_NOT_VALIDATED: shared manifest validator failed: {e}")
+    if manifest.get("strategy_identifier") != "rs_m126_top30_sma100_no_regime_v2_clean_stock":
+        raise ValueError("V2_DATASET_NOT_VALIDATED: strategy identifier mismatch")
+    if manifest.get("target_start_date") != "2020-07-27" or manifest.get("target_end_date") != "2026-07-07":
+        raise ValueError("V2_DATASET_NOT_VALIDATED: target period mismatch")
+    if manifest.get("dataset_profile") != "rs_v2_clean":
+        raise ValueError("V2_DATASET_NOT_VALIDATED: dataset_profile is not rs_v2_clean")
+    if manifest.get("adjustment") != "all":
+        raise ValueError("V2_DATASET_NOT_VALIDATED: adjustment is not all")
+    if manifest.get("feed") != "iex":
+        raise ValueError("V2_DATASET_NOT_VALIDATED: feed is not iex")
+    if manifest.get("candidate_universe_hash") != "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611":
+        raise ValueError("V2_DATASET_NOT_VALIDATED: candidate universe hash mismatch")
+    if manifest.get("candidate_count") != 178:
+        raise ValueError("V2_DATASET_NOT_VALIDATED: candidate count mismatch")
+    if manifest.get("status") != "COMPLETE_VALIDATED":
+        raise ValueError("V2_DATASET_NOT_VALIDATED: manifest status is not COMPLETE_VALIDATED")
+
+    etfs = {
+        "DIA", "IBB", "IWM", "QQQ", "RSP", "SMH", "SOXX", "SPY", "VTI", "XBI",
+        "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV",
+        "XLY", "XRT"
+    }
+
+    files = manifest.get("files", [])
+    if len(files) != 360 or manifest.get("logical_acquisition_item_count") != 360:
+        raise ValueError(f"V2_DATASET_NOT_VALIDATED: expected 360 files in manifest, got {len(files)}")
+    if manifest.get("successful_item_count") != 360 or manifest.get("failed_item_count") != 0:
+        raise ValueError("V2_DATASET_NOT_VALIDATED: manifest count reconciliation failed")
+    seen, role_counts, symbol_counts = set(), {"CANDIDATE": 0, "PRIMARY_BENCHMARK": 0, "SECONDARY_BENCHMARK": 0}, {"QQQ": 0, "SPY": 0}
+    for file_record in files:
+        symbol, role = file_record.get("symbol"), file_record.get("asset_role")
+        rel_path, expected_hash = file_record.get("output_relative_path"), file_record.get("sha256")
+        key = (symbol, file_record.get("timeframe"), rel_path)
+        if key in seen or not all(key):
+            raise ValueError("V2_DATASET_NOT_VALIDATED: duplicate or incomplete logical record")
+        seen.add(key)
+        if role not in role_counts:
+            raise ValueError("V2_DATASET_NOT_VALIDATED: unknown asset role")
+        role_counts[role] += 1
+        if symbol in symbol_counts:
+            symbol_counts[symbol] += 1
+        if file_record.get("feed") != "iex" or file_record.get("adjustment") != "all" or file_record.get("request_status") != "SUCCESS" or file_record.get("data_status") != "VALID":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: invalid request/data status or policy")
+
+        if role == "CANDIDATE":
+            if symbol in etfs or symbol in {"QQQ", "SPY"}:
+                raise ValueError(f"V2_DATASET_NOT_VALIDATED: blocked symbol {symbol} listed as CANDIDATE")
+        elif role in {"PRIMARY_BENCHMARK", "SECONDARY_BENCHMARK"}:
+            expected_symbol = "QQQ" if role == "PRIMARY_BENCHMARK" else "SPY"
+            if symbol != expected_symbol or not rel_path.startswith("benchmarks/"):
+                raise ValueError(f"V2_DATASET_NOT_VALIDATED: ordinary symbol {symbol} listed as BENCHMARK")
+        if role == "CANDIDATE" and rel_path.startswith("benchmarks/"):
+            raise ValueError("V2_DATASET_NOT_VALIDATED: candidate path in benchmarks")
+
+        file_path = folder / rel_path
+        if not file_path.exists():
+            raise ValueError(f"V2_DATASET_NOT_VALIDATED: file {rel_path} not found")
+
+        content = file_path.read_bytes()
+        actual_hash = hashlib.sha256(content).hexdigest()
+        if actual_hash != expected_hash:
+            raise ValueError(f"V2_DATASET_NOT_VALIDATED: SHA-256 hash mismatch for {rel_path}")
+
+        try:
+            import pandas as pd
+            df = pd.read_csv(file_path)
+            required_cols = {"Date", "Open", "High", "Low", "Close", "Volume"}
+            if not required_cols.issubset(df.columns):
+                raise ValueError(f"V2_DATASET_NOT_VALIDATED: missing required columns in {rel_path}")
+            if df[["Open", "High", "Low", "Close", "Volume"]].isna().any().any():
+                raise ValueError(f"V2_DATASET_NOT_VALIDATED: null values in OHLCV columns in {rel_path}")
+            dates = pd.to_datetime(df["Date"], errors="raise", utc=True)
+            if df.empty or not dates.is_monotonic_increasing or dates.duplicated().any() or not file_record.get("timezone"):
+                raise ValueError(f"V2_DATASET_NOT_VALIDATED: invalid timestamp integrity in {rel_path}")
+        except Exception as e:
+            raise ValueError(f"V2_DATASET_NOT_VALIDATED: failed to parse/verify CSV {rel_path}: {e}")
+        if file_record.get("timeframe") == "130min":
+            raw_path = file_record.get("source_raw_5min_relative_path", "")
+            source = folder / raw_path
+            if file_record.get("derivation_type") != "AGGREGATED_FROM_RAW_5MIN" or file_record.get("derivation_status") != "SUCCESS" or not raw_path or not source.exists() or hashlib.sha256(source.read_bytes()).hexdigest() != file_record.get("source_raw_5min_sha256"):
+                raise ValueError("V2_DATASET_NOT_VALIDATED: raw-to-130min lineage mismatch")
+    if role_counts != {"CANDIDATE": 356, "PRIMARY_BENCHMARK": 2, "SECONDARY_BENCHMARK": 2} or symbol_counts != {"QQQ": 2, "SPY": 2}:
+        raise ValueError("V2_DATASET_NOT_VALIDATED: role count mismatch")
+
+
 def run_strategy_experiments(
     data_folder="hisseler",
     experiments=None,
@@ -7593,6 +7719,11 @@ def run_strategy_experiments(
     force_rebuild_prepared_cache=False,
     **kwargs,
 ):
+    is_v2 = (data_folder == "testdata/research_data/rs_v2_clean_market_data" or
+             (experiments and any(exp.get("name") == "rs_m126_top30_sma100_no_regime_v2_clean_stock" for exp in experiments)))
+    if is_v2:
+        validate_v2_clean_dataset(data_folder)
+
     min_dollar_volume = float(kwargs.get("min_dollar_volume", 0.0) or 0.0)
     total_started = _now()
     cpu_started = time.process_time()
@@ -7930,6 +8061,11 @@ def run_strategy_experiments(
             paper_order_review,
             latest_dir / "paper_trade_log.csv",
             asset_data,
+        )
+        archive_new_paper_decision_events(
+            paper_signal_report,
+            asset_data,
+            Path(data_folder).resolve().parent / "state" / "paper_decision_events",
         )
         latest_daily_for_pending = _latest_csv_data_date(daily_dir)
         _write_paper_pending_orders(
@@ -8269,10 +8405,10 @@ def run_strategy_experiments(
     # SQLite mirror block
     db_path = resolve_project_path("state/trading_state.sqlite3", data_folder)
     run_id = f"run_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
-    
+
     try:
         init_state_db(str(db_path))
-        
+
         # 1. Pipeline run
         append_pipeline_run(
             str(db_path),
@@ -8286,7 +8422,7 @@ def run_strategy_experiments(
             regression_guard_status=operational_health.get("regression_guard", {}).get("status", "OK") if operational_health else "OK",
             total_runtime_sec=float(total_runtime_sec or 0)
         )
-        
+
         # 2. Paper orders
         orders_path = latest_dir / "paper_pending_orders.csv"
         if orders_path.exists():
@@ -8295,7 +8431,7 @@ def run_strategy_experiments(
                 append_paper_orders(str(db_path), run_id, orders_df)
             except Exception as e_ord:
                 print(f"WARNING: SQLite append_paper_orders failed to read CSV: {e_ord}")
-                
+
         # 3. Paper trades
         trades_path = latest_dir / "paper_trade_log.csv"
         if trades_path.exists():
@@ -8304,7 +8440,7 @@ def run_strategy_experiments(
                 append_paper_trades(str(db_path), run_id, trades_df)
             except Exception as e_trd:
                 print(f"WARNING: SQLite append_paper_trades failed to read CSV: {e_trd}")
-                
+
         # 4. Pipeline health/readiness checks
         if operational_health:
             checks = []
@@ -8345,7 +8481,7 @@ def run_strategy_experiments(
                     "message": "Report schema validation"
                 })
             append_pre_submit_checks(str(db_path), run_id, checks)
-            
+
         # Write state report files
         _write_sqlite_state_report(latest_dir, db_path)
         if daily_pipeline_status is not None:
@@ -8354,7 +8490,7 @@ def run_strategy_experiments(
             _write_sqlite_state_report(run_dir, db_path)
             if daily_pipeline_status is not None:
                 _write_paper_ledger_audit_report(run_dir, db_path, daily_pipeline_status)
-            
+
     except Exception as e_sql:
         print(f"WARNING: SQLite mirror execution failed: {e_sql}")
 
