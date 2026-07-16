@@ -565,6 +565,15 @@ def _source_commit() -> str | None:
 
 
 def ensure_project_venv() -> None:
+    if sys.platform != "win32":
+        linux_venv_python = PROJECT_DIR / ".venv_linux" / "bin" / "python"
+        if linux_venv_python.exists():
+            current_python = Path(sys.executable).resolve()
+            if current_python != linux_venv_python.resolve():
+                command = [str(linux_venv_python), str(Path(__file__).resolve()), *sys.argv[1:]]
+                raise SystemExit(subprocess.call(command, cwd=str(Path.cwd())))
+        return
+
     venv_python = PROJECT_DIR / ".venv" / "Scripts" / "python.exe"
     if not venv_python.exists():
         return
