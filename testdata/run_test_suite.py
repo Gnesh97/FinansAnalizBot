@@ -59,6 +59,8 @@ COMPILE_TARGETS = [
     "tests/test_rs_v2_daily_gap_selection_audit.py",
     "tests/test_rs_v2_gap_recovery_probe.py",
     "tests/test_rs_v2_provider_recovery.py",
+    "tests/test_v2_internal_session_exception.py",
+    "tests/test_v2_sip_profile.py",
 ]
 
 

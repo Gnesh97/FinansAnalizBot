@@ -104,6 +104,17 @@ GAP_RECOVERY_REQUIRED_COLUMNS = ["Date", "Open", "High", "Low", "Close", "Volume
 DEFAULT_V2_FROZEN_ROOT = BASE_DIR / "research_data" / "rs_v2_clean_market_data"
 DEFAULT_V2_RECOVERY_STAGING_ROOT = BASE_DIR / "research_data" / "rs_v2_clean_gap_recovery"
 
+# --- rs_v2_sip profile: additive, parallel to rs_v2_clean above. Phase 2A scope
+# is code foundations only -- mandatory-flag validation and --dry-run wiring are
+# implemented; --live acquisition/strict manifest finalization is intentionally
+# NOT implemented yet (see V2_SIP_LIVE_ACQUISITION_NOT_YET_IMPLEMENTED_PHASE2A
+# below), since no frozen candidate-universe baseline exists for this profile
+# until a real acquisition runs.
+V2_SIP_DATASET_SCHEMA_VERSION = "2.1.0"
+V2_SIP_BASELINE_PATH = BASE_DIR / "baselines" / "rs_v2_sip_baseline.json"
+V2_SIP_COVERAGE_EXCEPTIONS_PATH = BASE_DIR / "baselines" / "rs_v2_sip_coverage_exceptions.json"
+DEFAULT_V2_SIP_FROZEN_ROOT = BASE_DIR / "research_data" / "rs_v2_sip_market_data"
+
 
 @dataclass(frozen=True)
 class V2DatasetPaths:
@@ -296,6 +307,38 @@ def write_v2_coverage_review_reports(file_records: list[dict], latest_dir: Path)
     lines.extend(f"- {row['symbol']} {row['timeframe']} {row['exception_type']}: {row['reason']}" for row in rows)
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return md_path, csv_path, symbol_count
+
+
+def write_v2_applied_exceptions_report(file_records: list[dict], latest_dir: Path) -> tuple[Path, Path, int]:
+    """Surface every APPROVED_* coverage exception actually applied during validation.
+
+    Approved exceptions suppress a validation failure but must never be silently
+    absorbed -- each symbol/timeframe/date combination they covered is listed here.
+    """
+    rows = []
+    for record in file_records:
+        reason = str(record.get("coverage_exception_reason", ""))
+        reason_tokens = set(reason.split(";"))
+        symbol = record.get("symbol", "")
+        timeframe = record.get("timeframe", "")
+        if "APPROVED_LATE_START" in reason_tokens:
+            rows.append({"symbol": symbol, "timeframe": timeframe, "exception_type": "LATE_START", "affected_date": record.get("first_market_session", ""), "reason": reason})
+        if "APPROVED_EARLY_TERMINAL" in reason_tokens:
+            rows.append({"symbol": symbol, "timeframe": timeframe, "exception_type": "EARLY_TERMINAL", "affected_date": record.get("last_market_session", ""), "reason": reason})
+        if "APPROVED_MISSING_INTERNAL_SESSION" in reason_tokens:
+            for affected_date in record.get("approved_internal_session_exception_dates", []):
+                rows.append({"symbol": symbol, "timeframe": timeframe, "exception_type": "MISSING_INTERNAL_SESSION", "affected_date": affected_date, "reason": reason})
+    latest_dir = Path(latest_dir)
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = latest_dir / "rs_v2_applied_coverage_exceptions.csv"
+    md_path = latest_dir / "rs_v2_applied_coverage_exceptions.md"
+    columns = ["symbol", "timeframe", "exception_type", "affected_date", "reason"]
+    pd.DataFrame(rows, columns=columns).to_csv(csv_path, index=False)
+    applied_count = len(rows)
+    lines = ["# V2 Applied Coverage Exceptions", "", f"- applied_exception_count: {applied_count}", "- exceptions_silently_absorbed: false", ""]
+    lines.extend(f"- {row['symbol']} {row['timeframe']} {row['exception_type']} {row['affected_date']}: {row['reason']}" for row in rows)
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return md_path, csv_path, applied_count
 
 
 def write_v2_run_acquisition_report(run_dir: Path, latest_dir: Path, summary: dict, records: list[dict]) -> tuple[Path, Path]:
@@ -1760,7 +1803,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-row-count-reduction", action="store_true")
 
     # V2 profile options
-    parser.add_argument("--dataset-profile", choices=["rs_v2_clean"], default=None)
+    parser.add_argument("--dataset-profile", choices=["rs_v2_clean", "rs_v2_sip"], default=None)
     parser.add_argument("--start", default=None)
     parser.add_argument("--output-root", default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -1876,7 +1919,9 @@ def main() -> None:
     total_start = time.perf_counter()
     args = build_parser().parse_args()
 
-    is_v2 = (args.dataset_profile == "rs_v2_clean")
+    is_v2_clean = (args.dataset_profile == "rs_v2_clean")
+    is_v2_sip = (args.dataset_profile == "rs_v2_sip")
+    is_v2 = is_v2_clean or is_v2_sip
 
     selected_recovery_modes = sum(
         bool(value)
@@ -1895,7 +1940,7 @@ def main() -> None:
         feed_passed = any(arg.startswith("--feed") for arg in sys.argv)
         adjustment_passed = any(arg.startswith("--adjustment") for arg in sys.argv)
         if (
-            not is_v2
+            not is_v2_clean
             or args.feed != "iex"
             or args.adjustment != "all"
             or not feed_passed
@@ -1921,7 +1966,7 @@ def main() -> None:
         return
 
     if args.gap_recovery_plan:
-        if not is_v2 or args.feed != "iex" or args.adjustment != "all":
+        if not is_v2_clean or args.feed != "iex" or args.adjustment != "all":
             raise ValueError("GAP_RECOVERY_PLAN_INVOCATION_CONTRACT_MISMATCH")
         result = create_gap_recovery_plan(
             frozen_root=Path(args.output_root or DEFAULT_V2_FROZEN_ROOT),
@@ -1940,7 +1985,7 @@ def main() -> None:
 
     if args.gap_recovery_canary or args.gap_recovery_full:
         if (
-            not is_v2
+            not is_v2_clean
             or args.feed != "iex"
             or args.adjustment != "all"
             or not args.use_preflight_report
@@ -2016,7 +2061,7 @@ def main() -> None:
         raise ValueError("select exactly one offline V2 audit mode")
 
     if args.audit_run:
-        if not is_v2 or not args.output_root:
+        if not is_v2_clean or not args.output_root:
             raise ValueError("V2 audit requires --dataset-profile rs_v2_clean and --output-root")
         if args.live or args.dry_run:
             raise ValueError("V2 audit forbids --live and --dry-run")
@@ -2057,7 +2102,7 @@ def main() -> None:
     adjustment_passed = any(arg.startswith("--adjustment") for arg in sys.argv)
     feed_passed = any(arg.startswith("--feed") for arg in sys.argv)
 
-    if is_v2:
+    if is_v2_clean:
         if not adjustment_passed:
             raise ValueError("V2 profile requires explicit --adjustment parameter")
         if args.adjustment != "all":
@@ -2093,6 +2138,48 @@ def main() -> None:
 
         candidates, v2_baseline = load_v2_frozen_universe()
         symbols = [*candidates, "QQQ", "SPY"]
+    elif is_v2_sip:
+        if not adjustment_passed:
+            raise ValueError("V2 SIP profile requires explicit --adjustment parameter")
+        if args.adjustment != "all":
+            raise ValueError("V2 SIP profile requires --adjustment all")
+        if not feed_passed:
+            raise ValueError("V2 SIP profile requires explicit --feed parameter")
+        if args.feed != "sip":
+            raise ValueError("V2 SIP profile requires --feed sip")
+        if not args.start:
+            raise ValueError("V2 SIP profile requires --start")
+        if not args.end:
+            raise ValueError("V2 SIP profile requires --end")
+        if not args.output_root:
+            raise ValueError("V2 SIP profile requires --output-root")
+        if not (args.dry_run or args.live):
+            raise ValueError("V2 SIP profile requires either --dry-run or --live")
+        if args.dry_run and args.live:
+            raise ValueError("Cannot specify both --dry-run and --live")
+
+        # Phase 2A is code foundations only: mandatory-flag validation and the
+        # --dry-run plan/report path are implemented and tested; --live is
+        # intentionally not implemented yet, because no frozen candidate-universe
+        # baseline exists for this profile until a real acquisition establishes
+        # one (see V2_SIP_BASELINE_PATH). Attempting --live fails closed here
+        # rather than silently falling through to rs_v2_clean's strict manifest
+        # contract, which does not apply to this profile.
+        if args.live:
+            raise ValueError("V2_SIP_LIVE_ACQUISITION_NOT_YET_IMPLEMENTED_PHASE2A")
+
+        if not args.symbols:
+            raise ValueError("V2 SIP profile requires --symbols (no frozen baseline established yet)")
+
+        output_dir = Path(args.output_root)
+        daily_start = parse_utc_date(args.start)
+        intraday_start = parse_utc_date(args.start)
+        daily_end = parse_utc_date(args.end).replace(hour=23, minute=59, second=59)
+        intraday_end = parse_utc_date(args.end).replace(hour=23, minute=59, second=59)
+
+        requested_symbols = unique_symbols(args.symbols)
+        candidates = [symbol for symbol in requested_symbols if symbol not in V2_BENCHMARK_ROLES]
+        symbols = [*candidates, "QQQ", "SPY"]
     else:
         if args.feed is None:
             args.feed = "iex"
@@ -2119,7 +2206,7 @@ def main() -> None:
         plan_csv, plan_md = write_v2_dry_run_plan(report_dir, plan_rows)
 
         print(f"DRY RUN SUCCESSFUL. Plan generated at {plan_csv} and {plan_md}.")
-        print("logical_acquisition_item_count: 360")
+        print(f"logical_acquisition_item_count: {len(plan_rows)}")
         print("Status: DRY_RUN_PLAN_ONLY")
         sys.exit(0)
 

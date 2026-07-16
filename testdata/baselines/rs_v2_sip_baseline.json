@@ -1,0 +1,8 @@
+{
+  "baseline_schema_version": "2.1.0",
+  "dataset_profile": "rs_v2_sip",
+  "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock",
+  "status": "NOT_YET_ACQUIRED",
+  "note": "Placeholder created in Phase 2A (code foundations only). This file is populated by a real rs_v2_sip acquisition run in a later phase, mirroring how rs_m126_top30_sma100_no_regime_v2_clean_stock.json was frozen after the rs_v2_clean acquisition. No candidate universe is frozen yet.",
+  "universe": null
+}
