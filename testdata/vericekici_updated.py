@@ -267,6 +267,90 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
         validate_v2_symbol_session_ranges(symbol, daily, intraday)
 
 
+def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, frozen_baseline: dict | None = None) -> None:
+    """Shared pure V2 SIP publication/backtest contract validator. Raises on any mismatch."""
+    root = Path(dataset_root)
+    candidates, baseline = load_v2_frozen_universe(V2_BASELINE_PATH)
+    if frozen_baseline is not None and frozen_baseline.get("strategy_identifier") != V2_STRATEGY_IDENTIFIER:
+        raise ValueError(V2_UNIVERSE_CONTRACT_MISMATCH)
+    exact = {
+        "dataset_schema_version": "2.1.0", "dataset_profile": "rs_v2_sip", "strategy_identifier": V2_STRATEGY_IDENTIFIER,
+        "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "sip", "adjustment": "all",
+        "candidate_count": len(candidates), "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
+        "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0,
+    }
+    if any(manifest.get(key) != value for key, value in exact.items()) or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
+        raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
+    validate_v2_retry_telemetry(manifest)
+    expected = {(row["symbol"], row["timeframe"]): row for row in build_v2_acquisition_plan(root, candidates, manifest.get("target_start_date"), manifest.get("target_end_date"), "sip", "all")}
+    actual = {}
+    for record in manifest.get("files", []):
+        key = (record.get("symbol"), record.get("timeframe"))
+        if key in actual:
+            raise ValueError("V2_DATASET_NOT_VALIDATED: duplicate symbol/timeframe")
+        actual[key] = record
+    if set(actual) != set(expected):
+        raise ValueError("V2_DATASET_NOT_VALIDATED: exact logical record set mismatch")
+    exceptions = load_reviewed_coverage_exceptions(V2_SIP_COVERAGE_EXCEPTIONS_PATH)
+    for key, expected_record in expected.items():
+        record = actual[key]
+        if (record.get("asset_role") != expected_record["asset_role"] or record.get("output_relative_path") != expected_record["output_relative_path"] or record.get("requested_start") != exact["target_start_date"] or record.get("requested_end") != exact["target_end_date"] or record.get("feed") != "sip" or record.get("adjustment") != "all" or record.get("acquisition_run_id") != manifest["acquisition_run_id"]):
+            raise ValueError("V2_DATASET_NOT_VALIDATED: role/path mismatch")
+        path = root / record["output_relative_path"]
+        integrity = verify_file_integrity(path)
+        if record.get("request_status") != "SUCCESS" or integrity["data_status"] != "VALID" or integrity["sha256"] != record.get("sha256"):
+            raise ValueError("V2_DATASET_NOT_VALIDATED: file integrity/status mismatch")
+        if not COVERAGE_FIELDS.issubset(record):
+            raise ValueError("V2_DATASET_NOT_VALIDATED: missing coverage metadata")
+        if record["timeframe"] == "1D":
+            if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
+                raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
+        if record["timeframe"] == "130min":
+            raw_relative = record.get("source_raw_5min_relative_path", "")
+            expected_raw_relative = resolve_v2_dataset_paths(root, record["symbol"]).raw_5min.relative_to(root).as_posix()
+            if not raw_relative or Path(raw_relative).is_absolute() or Path(raw_relative).as_posix() != expected_raw_relative:
+                raise ValueError("V2_DATASET_NOT_VALIDATED: raw-to-130min lineage path mismatch")
+            raw = root / raw_relative
+            raw_integrity = verify_file_integrity(raw)
+            if raw_integrity["data_status"] != "VALID" or raw_integrity["sha256"] != record.get("source_raw_5min_sha256") or raw_integrity["row_count"] != record.get("source_raw_5min_row_count") or integrity["row_count"] != record.get("derived_row_count") or record.get("derivation_status") != "SUCCESS":
+                raise ValueError("V2_DATASET_NOT_VALIDATED: raw-to-130min lineage mismatch")
+            if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("raw_downloaded_in_current_run") is not True or record.get("aggregation_result_status") != "BUILT":
+                raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
+    market_schedule = approved_nyse_schedule(exact["target_start_date"], exact["target_end_date"])
+    recomputed_by_symbol = {}
+    for key in expected:
+        record = actual[key]
+        path = root / record["output_relative_path"]
+        coverage = validate_v2_file_coverage(
+            path, record, record["symbol"], record["timeframe"], exact["target_start_date"], exact["target_end_date"],
+            reviewed_exceptions=exceptions, market_schedule=market_schedule,
+        )
+        recomputed_by_symbol.setdefault(record["symbol"], {})[record["timeframe"]] = coverage
+    for symbol, coverages in recomputed_by_symbol.items():
+        daily = coverages.get("1D", {})
+        intraday = coverages.get("130min", {})
+        validate_v2_symbol_session_ranges(symbol, daily, intraday)
+
+
+def freeze_v2_sip_baseline() -> None:
+    """Populates baselines/rs_v2_sip_baseline.json on successful SIP validation."""
+    clean_baseline = json.loads(V2_BASELINE_PATH.read_text(encoding="utf-8"))
+    sip_baseline = {
+        "baseline_schema_version": "2.1.0",
+        "dataset_profile": "rs_v2_sip",
+        "strategy_identifier": V2_STRATEGY_IDENTIFIER,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "status": "FROZEN",
+        "universe": clean_baseline.get("universe"),
+        "benchmark": clean_baseline.get("benchmark"),
+        "strategy": clean_baseline.get("strategy"),
+        "execution": clean_baseline.get("execution"),
+        "sizing_contract": clean_baseline.get("sizing_contract"),
+    }
+    _atomic_write_json(sip_baseline, V2_SIP_BASELINE_PATH)
+    print(f"SIP baseline successfully frozen and written to {V2_SIP_BASELINE_PATH}", flush=True)
+
+
 def build_v2_acquisition_plan(output_root: Path, candidates: list[str], start: str, end: str, feed: str, adjustment: str) -> list[dict]:
     rows = []
     for symbol in [*candidates, "QQQ", "SPY"]:
@@ -277,19 +361,20 @@ def build_v2_acquisition_plan(output_root: Path, candidates: list[str], start: s
     return rows
 
 
-def write_v2_dry_run_plan(report_dir: Path, plan_rows: list[dict]) -> tuple[Path, Path]:
+def write_v2_dry_run_plan(report_dir: Path, plan_rows: list[dict], profile: str = "rs_v2_clean") -> tuple[Path, Path]:
     """Write only explicit dry-run report destination; never acquisition state."""
     report_dir = Path(report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
-    plan_csv = report_dir / "rs_v2_clean_data_acquisition_plan.csv"
-    plan_md = report_dir / "rs_v2_clean_data_acquisition_plan.md"
+    plan_csv = report_dir / f"{profile}_data_acquisition_plan.csv"
+    plan_md = report_dir / f"{profile}_data_acquisition_plan.md"
     frame = pd.DataFrame(plan_rows)
     frame.to_csv(plan_csv, index=False)
-    plan_md.write_text("\n".join(["# V2 Clean Data Acquisition Plan", "", "- Status: `DRY_RUN_PLAN_ONLY`", f"- logical_acquisition_item_count: {len(plan_rows)}", "", frame.to_markdown(index=False)]) + "\n", encoding="utf-8")
+    title = "V2 SIP Data Acquisition Plan" if profile == "rs_v2_sip" else "V2 Clean Data Acquisition Plan"
+    plan_md.write_text("\n".join([f"# {title}", "", "- Status: `DRY_RUN_PLAN_ONLY`", f"- logical_acquisition_item_count: {len(plan_rows)}", "", frame.to_markdown(index=False)]) + "\n", encoding="utf-8")
     return plan_csv, plan_md
 
 
-def write_v2_coverage_review_reports(file_records: list[dict], latest_dir: Path) -> tuple[Path, Path, int]:
+def write_v2_coverage_review_reports(file_records: list[dict], latest_dir: Path, profile: str = "rs_v2_clean") -> tuple[Path, Path, int]:
     rows = []
     for record in file_records:
         reason = str(record.get("coverage_exception_reason", ""))
@@ -298,18 +383,19 @@ def write_v2_coverage_review_reports(file_records: list[dict], latest_dir: Path)
                 rows.append({"symbol": record.get("symbol", ""), "timeframe": record.get("timeframe", ""), "exception_type": exception_type, "reason": reason})
     latest_dir = Path(latest_dir)
     latest_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = latest_dir / "rs_v2_clean_coverage_review_required.csv"
-    md_path = latest_dir / "rs_v2_clean_coverage_review_required.md"
+    csv_path = latest_dir / f"{profile}_coverage_review_required.csv"
+    md_path = latest_dir / f"{profile}_coverage_review_required.md"
     columns = ["symbol", "timeframe", "exception_type", "reason"]
     pd.DataFrame(rows, columns=columns).to_csv(csv_path, index=False)
     symbol_count = len({str(row["symbol"]) for row in rows})
-    lines = ["# V2 Coverage Review Required", "", f"- review_required_symbol_count: {symbol_count}", f"- review_required_record_count: {len(rows)}", "- exceptions_auto_approved: false", ""]
+    title = "V2 SIP Coverage Review Required" if profile == "rs_v2_sip" else "V2 Coverage Review Required"
+    lines = [f"# {title}", "", f"- review_required_symbol_count: {symbol_count}", f"- review_required_record_count: {len(rows)}", "- exceptions_auto_approved: false", ""]
     lines.extend(f"- {row['symbol']} {row['timeframe']} {row['exception_type']}: {row['reason']}" for row in rows)
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return md_path, csv_path, symbol_count
 
 
-def write_v2_applied_exceptions_report(file_records: list[dict], latest_dir: Path) -> tuple[Path, Path, int]:
+def write_v2_applied_exceptions_report(file_records: list[dict], latest_dir: Path, profile: str = "rs_v2_clean") -> tuple[Path, Path, int]:
     """Surface every APPROVED_* coverage exception actually applied during validation.
 
     Approved exceptions suppress a validation failure but must never be silently
@@ -330,31 +416,38 @@ def write_v2_applied_exceptions_report(file_records: list[dict], latest_dir: Pat
                 rows.append({"symbol": symbol, "timeframe": timeframe, "exception_type": "MISSING_INTERNAL_SESSION", "affected_date": affected_date, "reason": reason})
     latest_dir = Path(latest_dir)
     latest_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = latest_dir / "rs_v2_applied_coverage_exceptions.csv"
-    md_path = latest_dir / "rs_v2_applied_coverage_exceptions.md"
+    if profile == "rs_v2_sip":
+        csv_path = latest_dir / "rs_v2_sip_applied_coverage_exceptions.csv"
+        md_path = latest_dir / "rs_v2_sip_applied_coverage_exceptions.md"
+        title = "V2 SIP Applied Coverage Exceptions"
+    else:
+        csv_path = latest_dir / "rs_v2_applied_coverage_exceptions.csv"
+        md_path = latest_dir / "rs_v2_applied_coverage_exceptions.md"
+        title = "V2 Applied Coverage Exceptions"
     columns = ["symbol", "timeframe", "exception_type", "affected_date", "reason"]
     pd.DataFrame(rows, columns=columns).to_csv(csv_path, index=False)
     applied_count = len(rows)
-    lines = ["# V2 Applied Coverage Exceptions", "", f"- applied_exception_count: {applied_count}", "- exceptions_silently_absorbed: false", ""]
+    lines = [f"# {title}", "", f"- applied_exception_count: {applied_count}", "- exceptions_silently_absorbed: false", ""]
     lines.extend(f"- {row['symbol']} {row['timeframe']} {row['exception_type']} {row['affected_date']}: {row['reason']}" for row in rows)
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return md_path, csv_path, applied_count
 
 
-def write_v2_run_acquisition_report(run_dir: Path, latest_dir: Path, summary: dict, records: list[dict]) -> tuple[Path, Path]:
+def write_v2_run_acquisition_report(run_dir: Path, latest_dir: Path, summary: dict, records: list[dict], profile: str = "rs_v2_clean") -> tuple[Path, Path]:
     """Write V2-only run diagnostics without touching the legacy refresh report."""
     required = {"acquisition_run_id", "dataset_profile", "refresh_mode", "symbol_count", "requested_start", "requested_end", "validation_status"}
     if not required.issubset(summary):
         raise ValueError("V2_ACQUISITION_REPORT_SUMMARY_INCOMPLETE")
-    lines = ["# V2 Clean Acquisition Report", ""]
+    title = "V2 SIP Acquisition Report" if profile == "rs_v2_sip" else "V2 Clean Acquisition Report"
+    lines = [f"# {title}", ""]
     lines.extend(f"- {key}: {summary.get(key, '')}" for key in sorted(summary))
     lines.extend(["", f"Manifest records: {len(records)}", ""])
     text = "\n".join(lines)
     run_dir, latest_dir = Path(run_dir), Path(latest_dir)
     run_md = run_dir / "acquisition_report.md"
     run_csv = run_dir / "acquisition_report.csv"
-    latest_md = latest_dir / "rs_v2_clean_acquisition_report.md"
-    latest_csv = latest_dir / "rs_v2_clean_acquisition_report.csv"
+    latest_md = latest_dir / f"{profile}_acquisition_report.md"
+    latest_csv = latest_dir / f"{profile}_acquisition_report.csv"
     run_dir.mkdir(parents=True, exist_ok=True)
     latest_dir.mkdir(parents=True, exist_ok=True)
     for path in (run_md, latest_md):
@@ -377,18 +470,19 @@ def finalize_v2_with_report(
     latest_report_dir: Path,
     report_summary: dict,
     records: list[dict],
+    profile: str = "rs_v2_clean",
 ) -> None:
-    write_v2_run_acquisition_report(run_report_dir, latest_report_dir, {**report_summary, "validation_status": "VALIDATION_PENDING"}, records)
+    write_v2_run_acquisition_report(run_report_dir, latest_report_dir, {**report_summary, "validation_status": "VALIDATION_PENDING"}, records, profile=profile)
     try:
-        finalize_v2_manifest(manifest, run_manifest_path, latest_manifest_path)
+        finalize_v2_manifest(manifest, run_manifest_path, latest_manifest_path, profile=profile)
     except BaseException as original_error:
         status = "FAILED_VALIDATION" if isinstance(original_error, Exception) else "INTERRUPTED"
         try:
-            write_v2_run_acquisition_report(run_report_dir, latest_report_dir, {**report_summary, "validation_status": status}, records)
+            write_v2_run_acquisition_report(run_report_dir, latest_report_dir, {**report_summary, "validation_status": status}, records, profile=profile)
         except Exception:
             pass
         raise
-    write_v2_run_acquisition_report(run_report_dir, latest_report_dir, {**report_summary, "validation_status": "COMPLETE_VALIDATED"}, records)
+    write_v2_run_acquisition_report(run_report_dir, latest_report_dir, {**report_summary, "validation_status": "COMPLETE_VALIDATED"}, records, profile=profile)
 
 
 @contextmanager
@@ -423,7 +517,7 @@ def _atomic_write_json(payload: dict, path: Path) -> None:
     os.replace(temporary, path)
 
 
-def finalize_v2_manifest(manifest: dict, run_manifest_path: Path, latest_manifest_path: Path) -> None:
+def finalize_v2_manifest(manifest: dict, run_manifest_path: Path, latest_manifest_path: Path, profile: str = "rs_v2_clean") -> None:
     if manifest.get("status") != "VALIDATION_PENDING":
         raise ValueError("V2_MANIFEST_NOT_VALIDATION_PENDING")
     _atomic_write_json(manifest, run_manifest_path)
@@ -433,12 +527,19 @@ def finalize_v2_manifest(manifest: dict, run_manifest_path: Path, latest_manifes
         logical_keys = {(row.get("symbol"), row.get("timeframe"), row.get("output_relative_path")) for row in records}
         if committed.get("status") != "VALIDATION_PENDING" or len(records) != 360 or len(logical_keys) != 360:
             raise ValueError("V2_IMMUTABLE_MANIFEST_COMMIT_FAILED")
-        validate_v2_manifest_and_files(latest_manifest_path.parents[1], committed)
+        if profile == "rs_v2_sip":
+            validate_v2_sip_manifest_and_files(latest_manifest_path.parents[1], committed)
+        else:
+            validate_v2_manifest_and_files(latest_manifest_path.parents[1], committed)
         committed = {**committed, "status": "COMPLETE_VALIDATED"}
         committed["validation_completed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         _atomic_write_json(committed, run_manifest_path)
         committed = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-        validate_v2_manifest_and_files(latest_manifest_path.parents[1], committed)
+        if profile == "rs_v2_sip":
+            validate_v2_sip_manifest_and_files(latest_manifest_path.parents[1], committed)
+            freeze_v2_sip_baseline()
+        else:
+            validate_v2_manifest_and_files(latest_manifest_path.parents[1], committed)
     except Exception as exc:
         failed = json.loads(run_manifest_path.read_text(encoding="utf-8"))
         failed = {
@@ -1914,7 +2015,26 @@ def verify_file_integrity(file_path: Path) -> dict:
         }
 
 
+_current_run_manifest_path: Path | None = None
+_current_manifest_data: dict | None = None
+
+
 def main() -> None:
+    try:
+        _main_impl()
+    except BaseException as exc:
+        global _current_run_manifest_path, _current_manifest_data
+        if _current_run_manifest_path is not None and _current_manifest_data is not None:
+            try:
+                _current_manifest_data["status"] = "FAILED"
+                _current_manifest_data["failed_reason"] = f"{type(exc).__name__}: {str(exc)}"
+                _atomic_write_json(_current_manifest_data, _current_run_manifest_path)
+            except Exception:
+                pass
+        raise exc
+
+
+def _main_impl() -> None:
     ensure_project_venv()
     total_start = time.perf_counter()
     args = build_parser().parse_args()
@@ -2158,28 +2278,27 @@ def main() -> None:
         if args.dry_run and args.live:
             raise ValueError("Cannot specify both --dry-run and --live")
 
-        # Phase 2A is code foundations only: mandatory-flag validation and the
-        # --dry-run plan/report path are implemented and tested; --live is
-        # intentionally not implemented yet, because no frozen candidate-universe
-        # baseline exists for this profile until a real acquisition establishes
-        # one (see V2_SIP_BASELINE_PATH). Attempting --live fails closed here
-        # rather than silently falling through to rs_v2_clean's strict manifest
-        # contract, which does not apply to this profile.
-        if args.live:
-            raise ValueError("V2_SIP_LIVE_ACQUISITION_NOT_YET_IMPLEMENTED_PHASE2A")
-
-        if not args.symbols:
-            raise ValueError("V2 SIP profile requires --symbols (no frozen baseline established yet)")
-
         output_dir = Path(args.output_root)
         daily_start = parse_utc_date(args.start)
         intraday_start = parse_utc_date(args.start)
         daily_end = parse_utc_date(args.end).replace(hour=23, minute=59, second=59)
         intraday_end = parse_utc_date(args.end).replace(hour=23, minute=59, second=59)
 
-        requested_symbols = unique_symbols(args.symbols)
-        candidates = [symbol for symbol in requested_symbols if symbol not in V2_BENCHMARK_ROLES]
-        symbols = [*candidates, "QQQ", "SPY"]
+        if args.live:
+            if not args.overwrite:
+                raise ValueError("V2 LIVE initial acquisition requires --overwrite")
+            if args.refresh_latest or args.skip_download or args.only_aggregate_130min:
+                raise ValueError("V2 LIVE initial acquisition forbids refresh/skip/aggregate-only")
+            if args.start != "2020-07-27" or args.end != "2026-07-07":
+                raise ValueError("V2 SIP profile target dates must be start=2020-07-27, end=2026-07-07")
+            candidates, v2_baseline = load_v2_frozen_universe()
+            symbols = [*candidates, "QQQ", "SPY"]
+        else:
+            if not args.symbols:
+                raise ValueError("V2 SIP profile requires --symbols (no frozen baseline established yet)")
+            requested_symbols = unique_symbols(args.symbols)
+            candidates = [symbol for symbol in requested_symbols if symbol not in V2_BENCHMARK_ROLES]
+            symbols = [*candidates, "QQQ", "SPY"]
     else:
         if args.feed is None:
             args.feed = "iex"
@@ -2286,10 +2405,10 @@ def main() -> None:
         download_report_csv_path = manifest_dir / "download_manifest.csv"
         source_commit = _source_commit()
         manifest_data = {
-            "dataset_schema_version": "2.0.0",
+            "dataset_schema_version": "2.1.0" if is_v2_sip else "2.0.0",
             "acquisition_run_id": run_id,
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "dataset_profile": "rs_v2_clean",
+            "dataset_profile": args.dataset_profile,
             "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock",
             "target_start_date": args.start,
             "target_end_date": args.end,
@@ -2313,6 +2432,9 @@ def main() -> None:
             "downloader_call_path": "testdata/vericekici_updated.py",
             "files": []
         }
+        global _current_run_manifest_path, _current_manifest_data
+        _current_run_manifest_path = run_manifest_path
+        _current_manifest_data = manifest_data
         _atomic_write_json(manifest_data, run_manifest_path)
 
     download_payloads = []
@@ -2563,7 +2685,7 @@ def main() -> None:
         successful_count = 0
         failed_count = 0
         file_records = []
-        reviewed_exceptions = load_reviewed_coverage_exceptions(V2_COVERAGE_EXCEPTIONS_PATH)
+        reviewed_exceptions = load_reviewed_coverage_exceptions(V2_SIP_COVERAGE_EXCEPTIONS_PATH if is_v2_sip else V2_COVERAGE_EXCEPTIONS_PATH)
         market_schedule = approved_nyse_schedule(args.start, args.end)
 
         for symbol in symbols:
@@ -2673,12 +2795,13 @@ def main() -> None:
         manifest_data["retry_attempt_count"] = sum(item["retry_attempt_count"] for item in download_results.values()) if telemetry_measured else None
         manifest_data["failed_provider_attempt_count"] = sum(item["failed_provider_attempt_count"] for item in download_results.values()) if telemetry_measured else None
 
-        write_v2_coverage_review_reports(file_records, BASE_DIR / "reports" / "latest")
+        write_v2_coverage_review_reports(file_records, BASE_DIR / "reports" / "latest", profile=args.dataset_profile)
+        write_v2_applied_exceptions_report(file_records, BASE_DIR / "reports" / "latest", profile=args.dataset_profile)
 
         manifest_data["status"] = "VALIDATION_PENDING"
         acquisition_report = {
             "acquisition_run_id": run_id,
-            "dataset_profile": "rs_v2_clean",
+            "dataset_profile": args.dataset_profile,
             "refresh_mode": refresh_mode,
             "symbol_count": len(symbols),
             "requested_start": args.start,
@@ -2697,6 +2820,7 @@ def main() -> None:
             BASE_DIR / "reports" / "latest",
             acquisition_report,
             file_records,
+            profile=args.dataset_profile,
         )
         print(f"Acquisition successfully validated. Published atomic latest manifest to {latest_manifest_path}")
 

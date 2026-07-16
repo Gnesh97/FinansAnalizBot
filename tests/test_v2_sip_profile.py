@@ -71,9 +71,17 @@ class TestSipProfileMandatoryFlags(unittest.TestCase):
         argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--adjustment", "all", "--feed", "sip", "--start", "2024-01-02", "--end", "2024-01-05", "--output-root", "unused", "--dry-run"]
         self._run(argv, "no frozen baseline established yet")
 
-    def test_live_not_yet_implemented_in_phase2a(self):
-        argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--adjustment", "all", "--feed", "sip", "--start", "2024-01-02", "--end", "2024-01-05", "--output-root", "unused", "--symbols", "AAPL", "--live"]
-        self._run(argv, "V2_SIP_LIVE_ACQUISITION_NOT_YET_IMPLEMENTED_PHASE2A")
+    def test_live_requires_overwrite(self):
+        argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--adjustment", "all", "--feed", "sip", "--start", "2020-07-27", "--end", "2026-07-07", "--output-root", "unused", "--live"]
+        self._run(argv, "initial acquisition requires --overwrite")
+
+    def test_live_forbids_refresh_skip_aggregate_only(self):
+        argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--adjustment", "all", "--feed", "sip", "--start", "2020-07-27", "--end", "2026-07-07", "--output-root", "unused", "--live", "--overwrite", "--refresh-latest"]
+        self._run(argv, "initial acquisition forbids refresh/skip/aggregate-only")
+
+    def test_live_requires_target_dates(self):
+        argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--adjustment", "all", "--feed", "sip", "--start", "2024-01-02", "--end", "2024-01-05", "--output-root", "unused", "--live", "--overwrite"]
+        self._run(argv, "target dates must be start=2020-07-27, end=2026-07-07")
 
 
 class TestFeedRejectionRegression(unittest.TestCase):
