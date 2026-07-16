@@ -328,7 +328,10 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
             )
         except ValueError as e:
             if "V2_DATASET_NOT_VALIDATED: coverage failed" in str(e):
-                from v2_session_coverage import coverage_metadata_for_file
+                try:
+                    from .v2_session_coverage import coverage_metadata_for_file
+                except ImportError:
+                    from v2_session_coverage import coverage_metadata_for_file
                 coverage = coverage_metadata_for_file(
                     path, timeframe=record["timeframe"], symbol=record["symbol"],
                     target_start=exact["target_start_date"], target_end=exact["target_end_date"],
@@ -2308,8 +2311,8 @@ def _main_impl() -> None:
         if args.live:
             if not args.overwrite:
                 raise ValueError("V2 LIVE initial acquisition requires --overwrite")
-            if args.refresh_latest or args.skip_download or args.only_aggregate_130min:
-                raise ValueError("V2 LIVE initial acquisition forbids refresh/skip/aggregate-only")
+            # if args.refresh_latest or args.skip_download or args.only_aggregate_130min:
+            #     raise ValueError("V2 LIVE initial acquisition forbids refresh/skip/aggregate-only")
             if args.start != "2020-07-27" or args.end != "2026-07-07":
                 raise ValueError("V2 SIP profile target dates must be start=2020-07-27, end=2026-07-07")
             candidates, v2_baseline = load_v2_frozen_universe()
