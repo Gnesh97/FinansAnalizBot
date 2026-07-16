@@ -2026,14 +2026,15 @@ def verify_file_integrity(file_path: Path) -> dict:
 
 _current_run_manifest_path: Path | None = None
 _current_manifest_data: dict | None = None
+_acquisition_download_completed: bool = False
 
 
 def main() -> None:
     try:
         _main_impl()
     except BaseException as exc:
-        global _current_run_manifest_path, _current_manifest_data
-        if _current_run_manifest_path is not None and _current_manifest_data is not None:
+        global _current_run_manifest_path, _current_manifest_data, _acquisition_download_completed
+        if not _acquisition_download_completed and _current_run_manifest_path is not None and _current_manifest_data is not None:
             try:
                 _current_manifest_data["status"] = "FAILED"
                 _current_manifest_data["failed_reason"] = f"{type(exc).__name__}: {str(exc)}"
@@ -2690,6 +2691,8 @@ def _main_impl() -> None:
         "pending_symbols_current_session_rows": pending_symbols_current_session_rows_str,
     }
 
+    global _acquisition_download_completed
+    _acquisition_download_completed = True
     if is_v2 and args.live:
         successful_count = 0
         failed_count = 0
