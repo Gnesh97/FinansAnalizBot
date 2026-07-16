@@ -1,0 +1,486 @@
+{
+  "probe_run_utc": "2026-07-16T10:47:47.223642+00:00",
+  "total_http_request_count": 12,
+  "http_call_log": [
+    {
+      "n": 1,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2021-04-19T00:00:00+00:00",
+        "end": "2021-04-19T23:59:59+00:00",
+        "timeframe": "1Day",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "ABBV",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 2,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2021-04-19T13:30:00+00:00",
+        "end": "2021-04-19T20:00:00+00:00",
+        "timeframe": "5Min",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "ABBV",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 3,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2021-10-25T00:00:00+00:00",
+        "end": "2021-10-25T23:59:59+00:00",
+        "timeframe": "1Day",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "ALB",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 4,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2021-10-25T13:30:00+00:00",
+        "end": "2021-10-25T20:00:00+00:00",
+        "timeframe": "5Min",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "ALB",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 5,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2022-03-08T00:00:00+00:00",
+        "end": "2022-03-08T23:59:59+00:00",
+        "timeframe": "1Day",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "ABBV",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 6,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2022-03-08T14:30:00+00:00",
+        "end": "2022-03-08T21:00:00+00:00",
+        "timeframe": "5Min",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "ABBV",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 7,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2022-04-06T00:00:00+00:00",
+        "end": "2022-04-06T23:59:59+00:00",
+        "timeframe": "1Day",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "WBD",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 8,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2022-04-06T13:30:00+00:00",
+        "end": "2022-04-06T20:00:00+00:00",
+        "timeframe": "5Min",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "WBD",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 9,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2025-03-10T13:30:00+00:00",
+        "end": "2025-03-10T20:00:00+00:00",
+        "timeframe": "5Min",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "SPY",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 10,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2025-03-10T13:30:00+00:00",
+        "end": "2025-03-10T20:00:00+00:00",
+        "timeframe": "5Min",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "AAPL",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 11,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2024-12-23T14:30:00+00:00",
+        "end": "2024-12-23T21:00:00+00:00",
+        "timeframe": "5Min",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "SPY",
+        "limit": 10000,
+        "page_token": null
+      }
+    },
+    {
+      "n": 12,
+      "path": "/stocks/bars",
+      "params": {
+        "start": "2024-12-23T14:30:00+00:00",
+        "end": "2024-12-23T21:00:00+00:00",
+        "timeframe": "5Min",
+        "adjustment": "all",
+        "feed": "sip",
+        "symbols": "AAPL",
+        "limit": 10000,
+        "page_token": null
+      }
+    }
+  ],
+  "gap_date_results": [
+    {
+      "symbol": "ABBV",
+      "date": "2021-04-19",
+      "feed": "sip",
+      "rth_open_utc": "2021-04-19 13:30:00+00:00",
+      "rth_close_utc": "2021-04-19 20:00:00+00:00",
+      "daily_bar_count": 1,
+      "daily_coverage_status": "FAIL",
+      "daily_coverage_reason": "INSUFFICIENT_WARMUP",
+      "intraday": {
+        "expected_bar_count": 78,
+        "actual_bar_count": 2,
+        "missing_bar_count": 77,
+        "first_bar_timestamp": "2021-04-19 13:30:00+00:00",
+        "last_bar_timestamp": "2021-04-19 20:00:00+00:00",
+        "largest_intra_session_gap_minutes": 390.0,
+        "per_block": [
+          {
+            "block_start_utc": "2021-04-19 13:30:00+00:00",
+            "block_end_utc": "2021-04-19 15:40:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 1
+          },
+          {
+            "block_start_utc": "2021-04-19 15:40:00+00:00",
+            "block_end_utc": "2021-04-19 17:50:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 0
+          },
+          {
+            "block_start_utc": "2021-04-19 17:50:00+00:00",
+            "block_end_utc": "2021-04-19 20:00:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 0
+          }
+        ],
+        "complete": false
+      },
+      "intraday_pass": false
+    },
+    {
+      "symbol": "ALB",
+      "date": "2021-10-25",
+      "feed": "sip",
+      "rth_open_utc": "2021-10-25 13:30:00+00:00",
+      "rth_close_utc": "2021-10-25 20:00:00+00:00",
+      "daily_bar_count": 1,
+      "daily_coverage_status": "FAIL",
+      "daily_coverage_reason": "INSUFFICIENT_WARMUP",
+      "intraday": {
+        "expected_bar_count": 78,
+        "actual_bar_count": 2,
+        "missing_bar_count": 77,
+        "first_bar_timestamp": "2021-10-25 13:30:00+00:00",
+        "last_bar_timestamp": "2021-10-25 20:00:00+00:00",
+        "largest_intra_session_gap_minutes": 390.0,
+        "per_block": [
+          {
+            "block_start_utc": "2021-10-25 13:30:00+00:00",
+            "block_end_utc": "2021-10-25 15:40:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 1
+          },
+          {
+            "block_start_utc": "2021-10-25 15:40:00+00:00",
+            "block_end_utc": "2021-10-25 17:50:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 0
+          },
+          {
+            "block_start_utc": "2021-10-25 17:50:00+00:00",
+            "block_end_utc": "2021-10-25 20:00:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 0
+          }
+        ],
+        "complete": false
+      },
+      "intraday_pass": false
+    },
+    {
+      "symbol": "ABBV",
+      "date": "2022-03-08",
+      "feed": "sip",
+      "rth_open_utc": "2022-03-08 14:30:00+00:00",
+      "rth_close_utc": "2022-03-08 21:00:00+00:00",
+      "daily_bar_count": 1,
+      "daily_coverage_status": "FAIL",
+      "daily_coverage_reason": "INSUFFICIENT_WARMUP",
+      "intraday": {
+        "expected_bar_count": 78,
+        "actual_bar_count": 2,
+        "missing_bar_count": 77,
+        "first_bar_timestamp": "2022-03-08 14:30:00+00:00",
+        "last_bar_timestamp": "2022-03-08 21:00:00+00:00",
+        "largest_intra_session_gap_minutes": 390.0,
+        "per_block": [
+          {
+            "block_start_utc": "2022-03-08 14:30:00+00:00",
+            "block_end_utc": "2022-03-08 16:40:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 1
+          },
+          {
+            "block_start_utc": "2022-03-08 16:40:00+00:00",
+            "block_end_utc": "2022-03-08 18:50:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 0
+          },
+          {
+            "block_start_utc": "2022-03-08 18:50:00+00:00",
+            "block_end_utc": "2022-03-08 21:00:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 0
+          }
+        ],
+        "complete": false
+      },
+      "intraday_pass": false
+    },
+    {
+      "symbol": "WBD",
+      "date": "2022-04-06",
+      "feed": "sip",
+      "rth_open_utc": "2022-04-06 13:30:00+00:00",
+      "rth_close_utc": "2022-04-06 20:00:00+00:00",
+      "daily_bar_count": 1,
+      "daily_coverage_status": "FAIL",
+      "daily_coverage_reason": "INSUFFICIENT_WARMUP",
+      "intraday": {
+        "expected_bar_count": 78,
+        "actual_bar_count": 49,
+        "missing_bar_count": 29,
+        "first_bar_timestamp": "2022-04-06 13:30:00+00:00",
+        "last_bar_timestamp": "2022-04-06 19:55:00+00:00",
+        "largest_intra_session_gap_minutes": 25.0,
+        "per_block": [
+          {
+            "block_start_utc": "2022-04-06 13:30:00+00:00",
+            "block_end_utc": "2022-04-06 15:40:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 18
+          },
+          {
+            "block_start_utc": "2022-04-06 15:40:00+00:00",
+            "block_end_utc": "2022-04-06 17:50:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 18
+          },
+          {
+            "block_start_utc": "2022-04-06 17:50:00+00:00",
+            "block_end_utc": "2022-04-06 20:00:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 13
+          }
+        ],
+        "complete": false
+      },
+      "intraday_pass": false
+    }
+  ],
+  "provider_wide_date_results": [
+    {
+      "symbol": "SPY",
+      "date": "2025-03-10",
+      "feed": "sip",
+      "rth_open_utc": "2025-03-10 13:30:00+00:00",
+      "rth_close_utc": "2025-03-10 20:00:00+00:00",
+      "intraday": {
+        "expected_bar_count": 78,
+        "actual_bar_count": 79,
+        "missing_bar_count": 0,
+        "first_bar_timestamp": "2025-03-10 13:30:00+00:00",
+        "last_bar_timestamp": "2025-03-10 20:00:00+00:00",
+        "largest_intra_session_gap_minutes": 5.0,
+        "per_block": [
+          {
+            "block_start_utc": "2025-03-10 13:30:00+00:00",
+            "block_end_utc": "2025-03-10 15:40:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          },
+          {
+            "block_start_utc": "2025-03-10 15:40:00+00:00",
+            "block_end_utc": "2025-03-10 17:50:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          },
+          {
+            "block_start_utc": "2025-03-10 17:50:00+00:00",
+            "block_end_utc": "2025-03-10 20:00:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          }
+        ],
+        "complete": true
+      },
+      "intraday_pass": true
+    },
+    {
+      "symbol": "AAPL",
+      "date": "2025-03-10",
+      "feed": "sip",
+      "rth_open_utc": "2025-03-10 13:30:00+00:00",
+      "rth_close_utc": "2025-03-10 20:00:00+00:00",
+      "intraday": {
+        "expected_bar_count": 78,
+        "actual_bar_count": 79,
+        "missing_bar_count": 0,
+        "first_bar_timestamp": "2025-03-10 13:30:00+00:00",
+        "last_bar_timestamp": "2025-03-10 20:00:00+00:00",
+        "largest_intra_session_gap_minutes": 5.0,
+        "per_block": [
+          {
+            "block_start_utc": "2025-03-10 13:30:00+00:00",
+            "block_end_utc": "2025-03-10 15:40:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          },
+          {
+            "block_start_utc": "2025-03-10 15:40:00+00:00",
+            "block_end_utc": "2025-03-10 17:50:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          },
+          {
+            "block_start_utc": "2025-03-10 17:50:00+00:00",
+            "block_end_utc": "2025-03-10 20:00:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          }
+        ],
+        "complete": true
+      },
+      "intraday_pass": true
+    },
+    {
+      "symbol": "SPY",
+      "date": "2024-12-23",
+      "feed": "sip",
+      "rth_open_utc": "2024-12-23 14:30:00+00:00",
+      "rth_close_utc": "2024-12-23 21:00:00+00:00",
+      "intraday": {
+        "expected_bar_count": 78,
+        "actual_bar_count": 79,
+        "missing_bar_count": 0,
+        "first_bar_timestamp": "2024-12-23 14:30:00+00:00",
+        "last_bar_timestamp": "2024-12-23 21:00:00+00:00",
+        "largest_intra_session_gap_minutes": 5.0,
+        "per_block": [
+          {
+            "block_start_utc": "2024-12-23 14:30:00+00:00",
+            "block_end_utc": "2024-12-23 16:40:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          },
+          {
+            "block_start_utc": "2024-12-23 16:40:00+00:00",
+            "block_end_utc": "2024-12-23 18:50:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          },
+          {
+            "block_start_utc": "2024-12-23 18:50:00+00:00",
+            "block_end_utc": "2024-12-23 21:00:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          }
+        ],
+        "complete": true
+      },
+      "intraday_pass": true
+    },
+    {
+      "symbol": "AAPL",
+      "date": "2024-12-23",
+      "feed": "sip",
+      "rth_open_utc": "2024-12-23 14:30:00+00:00",
+      "rth_close_utc": "2024-12-23 21:00:00+00:00",
+      "intraday": {
+        "expected_bar_count": 78,
+        "actual_bar_count": 79,
+        "missing_bar_count": 0,
+        "first_bar_timestamp": "2024-12-23 14:30:00+00:00",
+        "last_bar_timestamp": "2024-12-23 21:00:00+00:00",
+        "largest_intra_session_gap_minutes": 5.0,
+        "per_block": [
+          {
+            "block_start_utc": "2024-12-23 14:30:00+00:00",
+            "block_end_utc": "2024-12-23 16:40:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          },
+          {
+            "block_start_utc": "2024-12-23 16:40:00+00:00",
+            "block_end_utc": "2024-12-23 18:50:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          },
+          {
+            "block_start_utc": "2024-12-23 18:50:00+00:00",
+            "block_end_utc": "2024-12-23 21:00:00+00:00",
+            "expected_bar_count": 26,
+            "actual_bar_count": 26
+          }
+        ],
+        "complete": true
+      },
+      "intraday_pass": true
+    }
+  ]
+}

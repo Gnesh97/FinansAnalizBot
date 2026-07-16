@@ -1,0 +1,168 @@
+{
+  "canary_run_utc": "2026-07-15T21:04:52.168469+00:00",
+  "total_request_count": 10,
+  "gap_probe_symbol_date_pairs": [
+    [
+      "ABBV",
+      "2021-04-19"
+    ],
+    [
+      "ALB",
+      "2021-10-25"
+    ],
+    [
+      "ABBV",
+      "2022-03-08"
+    ],
+    [
+      "WBD",
+      "2022-04-06"
+    ]
+  ],
+  "control_probe_symbol_date_pair": [
+    "SPY",
+    "2023-06-01"
+  ],
+  "results": [
+    {
+      "symbol": "ABBV",
+      "date": "2021-04-19",
+      "timeframe": "1Day",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2021-04-19T00:00:00+00:00",
+      "requested_end": "2021-04-19T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 1
+    },
+    {
+      "symbol": "ABBV",
+      "date": "2021-04-19",
+      "timeframe": "5Min",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2021-04-19T00:00:00+00:00",
+      "requested_end": "2021-04-19T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 2
+    },
+    {
+      "symbol": "ALB",
+      "date": "2021-10-25",
+      "timeframe": "1Day",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2021-10-25T00:00:00+00:00",
+      "requested_end": "2021-10-25T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 1
+    },
+    {
+      "symbol": "ALB",
+      "date": "2021-10-25",
+      "timeframe": "5Min",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2021-10-25T00:00:00+00:00",
+      "requested_end": "2021-10-25T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 5
+    },
+    {
+      "symbol": "ABBV",
+      "date": "2022-03-08",
+      "timeframe": "1Day",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2022-03-08T00:00:00+00:00",
+      "requested_end": "2022-03-08T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 1
+    },
+    {
+      "symbol": "ABBV",
+      "date": "2022-03-08",
+      "timeframe": "5Min",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2022-03-08T00:00:00+00:00",
+      "requested_end": "2022-03-08T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 8
+    },
+    {
+      "symbol": "WBD",
+      "date": "2022-04-06",
+      "timeframe": "1Day",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2022-04-06T00:00:00+00:00",
+      "requested_end": "2022-04-06T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 1
+    },
+    {
+      "symbol": "WBD",
+      "date": "2022-04-06",
+      "timeframe": "5Min",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2022-04-06T00:00:00+00:00",
+      "requested_end": "2022-04-06T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 50
+    },
+    {
+      "symbol": "SPY",
+      "date": "2023-06-01",
+      "timeframe": "1Day",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2023-06-01T00:00:00+00:00",
+      "requested_end": "2023-06-01T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 1
+    },
+    {
+      "symbol": "SPY",
+      "date": "2023-06-01",
+      "timeframe": "5Min",
+      "feed": "sip",
+      "adjustment": "all",
+      "requested_start": "2023-06-01T00:00:00+00:00",
+      "requested_end": "2023-06-01T23:59:59+00:00",
+      "result": "SUCCESS",
+      "http_status": 200,
+      "error_code": null,
+      "error_message": null,
+      "row_count": 190
+    }
+  ]
+}
