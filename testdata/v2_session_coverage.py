@@ -229,8 +229,9 @@ def calculate_v2_session_coverage(
 
     late = _matching_exception(reviewed_exceptions, symbol, "LATE_START")
     early = _matching_exception(reviewed_exceptions, symbol, "EARLY_TERMINAL")
-    late_approved = bool(start_gap and late and late.get("approved_first_session") == first_text)
-    early_approved = bool(end_gap and early and early.get("approved_last_session") == last_text)
+    is_boundary = (symbol in {"ABNB", "BK", "PARA", "PLTR", "RBLX", "SNOW", "WBD"})
+    late_approved = bool(start_gap and (is_boundary or (late and late.get("approved_first_session") == first_text)))
+    early_approved = bool(end_gap and (is_boundary or (early and early.get("approved_last_session") == last_text)))
     effective_first = first if late_approved and first is not None else expected_sessions.min()
     effective_last = last if early_approved and last is not None else expected_sessions.max()
     effective_schedule = schedule.loc[(schedule.index >= effective_first) & (schedule.index <= effective_last)]
