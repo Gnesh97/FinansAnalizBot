@@ -467,13 +467,14 @@ def audit_v2_run(
     spy_impact = decision_impact[decision_impact["symbol"].eq("SPY")]["decision_path_status"].value_counts().to_dict()
 
     report_dir = Path(report_dir)
+    profile = manifest.get("dataset_profile", "rs_v2_clean")
     paths = {
-        "daily_gap_detail": report_dir / "rs_v2_clean_coverage_gap_detail.csv",
-        "gap_frequency": report_dir / "rs_v2_clean_coverage_gap_frequency.csv",
-        "intraday_block_audit": report_dir / "rs_v2_clean_intraday_block_audit.csv",
-        "decision_path_impact": report_dir / "rs_v2_clean_decision_path_impact.csv",
-        "boundary_exception_review": report_dir / "rs_v2_clean_boundary_exception_review.csv",
-        "markdown": report_dir / "rs_v2_clean_coverage_forensics.md",
+        "daily_gap_detail": report_dir / f"{profile}_coverage_gap_detail.csv",
+        "gap_frequency": report_dir / f"{profile}_coverage_gap_frequency.csv",
+        "intraday_block_audit": report_dir / f"{profile}_intraday_block_audit.csv",
+        "decision_path_impact": report_dir / f"{profile}_decision_path_impact.csv",
+        "boundary_exception_review": report_dir / f"{profile}_boundary_exception_review.csv",
+        "markdown": report_dir / f"{profile}_coverage_forensics.md",
     }
     _atomic_frame(daily_detail, paths["daily_gap_detail"])
     _atomic_frame(gap_frequency, paths["gap_frequency"])
@@ -484,7 +485,7 @@ def audit_v2_run(
     common_daily = gap_frequency[gap_frequency["scope"].eq("DAILY_MISSING_SESSION")].sort_values(["affected_symbol_count", "market_session"], ascending=[False, True])
     common_blocks = gap_frequency[gap_frequency["scope"].isin(["INTRADAY_MISSING_FULL_SESSION", "INTRADAY_MISSING_BLOCK"]) & gap_frequency["affected_symbol_count"].gt(1)].sort_values(["affected_symbol_count", "timestamp"], ascending=[False, True])
     lines = [
-        "# V2 Clean Coverage Forensics",
+        f"# {profile.replace('_', ' ').title().replace('Sip', 'SIP')} Coverage Forensics",
         "",
         f"- acquisition_run_id: {run_id}",
         f"- manifest_status: {manifest.get('status', '')}",

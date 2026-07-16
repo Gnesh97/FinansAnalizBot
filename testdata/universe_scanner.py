@@ -1,12 +1,14 @@
 try:
     import argparse
     import sys
+    import os
     from pathlib import Path
 
     from .runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_order_lifecycle_monitor, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 except ImportError:
     import argparse
     import sys
+    import os
     from pathlib import Path
 
     from runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_order_lifecycle_monitor, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
@@ -458,7 +460,7 @@ if __name__ == "__main__":
                 "rs_max_atr_pct": 12,
                 "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock"
             }]
-            data_folder = Path(__file__).resolve().parent / "research_data" / "rs_v2_clean_market_data"
+            data_folder = Path(os.environ.get("RUNNER_DATA_FOLDER", str(Path(__file__).resolve().parent / "research_data" / "rs_v2_clean_market_data")))
         else:
             matched = [exp for exp in VALIDATION_EXPERIMENTS if exp["name"] == args.experiment]
             if not matched:

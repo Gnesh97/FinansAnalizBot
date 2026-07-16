@@ -2205,8 +2205,8 @@ def _main_impl() -> None:
         raise ValueError("select exactly one offline V2 audit mode")
 
     if args.audit_run:
-        if not is_v2_clean or not args.output_root:
-            raise ValueError("V2 audit requires --dataset-profile rs_v2_clean and --output-root")
+        if not is_v2 or not args.output_root:
+            raise ValueError("V2 audit requires --dataset-profile rs_v2_clean/rs_v2_sip and --output-root")
         if args.live or args.dry_run:
             raise ValueError("V2 audit forbids --live and --dry-run")
         with v2_offline_audit_guard() as offline_telemetry:
