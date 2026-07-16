@@ -501,7 +501,7 @@ def fetch_bars_via_existing_downloader(
     """Use the approved downloader path; no bars REST or pagination exists here."""
     from testdata import vericekici_updated as downloader
 
-    frame = downloader.download_bars_with_retry(
+    download_result = downloader.download_bars_with_retry(
         api_key,
         secret_key,
         symbol,
@@ -513,6 +513,7 @@ def fetch_bars_via_existing_downloader(
         rth_only=False,
         attempts=config.max_retries + 1,
     )
+    frame = getattr(download_result, "frame", download_result)
     bars = [{
         "t": str(row.Date), "o": row.Open, "h": row.High,
         "l": row.Low, "c": row.Close, "v": row.Volume,
