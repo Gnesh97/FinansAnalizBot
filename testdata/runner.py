@@ -7663,7 +7663,8 @@ def validate_v2_clean_dataset(data_folder):
         role_counts[role] += 1
         if symbol in symbol_counts:
             symbol_counts[symbol] += 1
-        if file_record.get("feed") != "iex" or file_record.get("adjustment") != "all" or file_record.get("request_status") != "SUCCESS" or file_record.get("data_status") != "VALID":
+        expected_feed = "sip" if profile == "rs_v2_sip" else "iex"
+        if file_record.get("feed") != expected_feed or file_record.get("adjustment") != "all" or file_record.get("request_status") != "SUCCESS" or file_record.get("data_status") != "VALID":
             raise ValueError("V2_DATASET_NOT_VALIDATED: invalid request/data status or policy")
 
         if role == "CANDIDATE":
