@@ -1,0 +1,81 @@
+{
+  "exceptions": [
+    {
+      "affected_date": "2021-04-19",
+      "affected_symbols": "ALL",
+      "approved_at": "2026-07-16",
+      "approved_by": "operator",
+      "evidence_hash": "ca97653c0c356465911293ec29b42594de7d2004729a3c2919942ab62a353a8b",
+      "evidence_reports": [
+        "reports/audit/data_source_decision_brief_20260716.md",
+        "reports/audit/sip_completeness_and_fetch_history_20260716.md",
+        "reports/audit/sip_residual_impact_20260716.md"
+      ],
+      "exception_type": "MISSING_INTERNAL_SESSION",
+      "rationale": "SIP full-session probe (scripts/alpaca_sip_full_session_probe.py, Phase 1.6) proved this session's 5-minute intraday bars remain severely or meaningfully partial on the SIP feed (2/78 to 49/78 expected bars, 37-97% missing) even though the daily bar is complete. This mirrors the IEX-feed gap documented in reports/audit/data_source_decision_brief_20260716.md and is not resolved by a feed change alone.",
+      "residual_impact_statement": "Per reports/audit/sip_residual_impact_20260716.md: this date is not a monthly rebalance signal date and not a next-open execution date (category (c), all 4 known dates), and the ranking/selection engine (_relative_strength_daily_features via _daily_ohlcv_from_frame) is code-traced to depend exclusively on daily OHLCV with zero path through 130-min data -- so, with SIP providing complete daily coverage plus this exception, residual affected_rebalance_decision_count is 0 (down from 3,304/3,445 baselines). One secondary, non-decision-affecting nuance remains and is not softened: generate_relative_strength_rotation_signals (backtest/execution simulation only, a different function than the ranking engine) reindexes onto the 130-min timestamp index, so a full historical backtest spanning this date would silently skip same-day mark-to-market for every symbol on this date -- a simulation continuity artifact, not a trading decision.",
+      "reviewed": true,
+      "timeframes_affected": [
+        "130min"
+      ]
+    },
+    {
+      "affected_date": "2021-10-25",
+      "affected_symbols": "ALL",
+      "approved_at": "2026-07-16",
+      "approved_by": "operator",
+      "evidence_hash": "a600db5e7966f7571b61fb6d04cf6cf5598658742df5509d316063639a182d56",
+      "evidence_reports": [
+        "reports/audit/data_source_decision_brief_20260716.md",
+        "reports/audit/sip_completeness_and_fetch_history_20260716.md",
+        "reports/audit/sip_residual_impact_20260716.md"
+      ],
+      "exception_type": "MISSING_INTERNAL_SESSION",
+      "rationale": "SIP full-session probe (scripts/alpaca_sip_full_session_probe.py, Phase 1.6) proved this session's 5-minute intraday bars remain severely or meaningfully partial on the SIP feed (2/78 to 49/78 expected bars, 37-97% missing) even though the daily bar is complete. This mirrors the IEX-feed gap documented in reports/audit/data_source_decision_brief_20260716.md and is not resolved by a feed change alone.",
+      "residual_impact_statement": "Per reports/audit/sip_residual_impact_20260716.md: this date is not a monthly rebalance signal date and not a next-open execution date (category (c), all 4 known dates), and the ranking/selection engine (_relative_strength_daily_features via _daily_ohlcv_from_frame) is code-traced to depend exclusively on daily OHLCV with zero path through 130-min data -- so, with SIP providing complete daily coverage plus this exception, residual affected_rebalance_decision_count is 0 (down from 3,304/3,445 baselines). One secondary, non-decision-affecting nuance remains and is not softened: generate_relative_strength_rotation_signals (backtest/execution simulation only, a different function than the ranking engine) reindexes onto the 130-min timestamp index, so a full historical backtest spanning this date would silently skip same-day mark-to-market for every symbol on this date -- a simulation continuity artifact, not a trading decision.",
+      "reviewed": true,
+      "timeframes_affected": [
+        "130min"
+      ]
+    },
+    {
+      "affected_date": "2022-03-08",
+      "affected_symbols": "ALL",
+      "approved_at": "2026-07-16",
+      "approved_by": "operator",
+      "evidence_hash": "0bef2e644d364be9d0c9a2fa4638ebed8891913084fa4a6e63f6bed832061068",
+      "evidence_reports": [
+        "reports/audit/data_source_decision_brief_20260716.md",
+        "reports/audit/sip_completeness_and_fetch_history_20260716.md",
+        "reports/audit/sip_residual_impact_20260716.md"
+      ],
+      "exception_type": "MISSING_INTERNAL_SESSION",
+      "rationale": "SIP full-session probe (scripts/alpaca_sip_full_session_probe.py, Phase 1.6) proved this session's 5-minute intraday bars remain severely or meaningfully partial on the SIP feed (2/78 to 49/78 expected bars, 37-97% missing) even though the daily bar is complete. This mirrors the IEX-feed gap documented in reports/audit/data_source_decision_brief_20260716.md and is not resolved by a feed change alone.",
+      "residual_impact_statement": "Per reports/audit/sip_residual_impact_20260716.md: this date is not a monthly rebalance signal date and not a next-open execution date (category (c), all 4 known dates), and the ranking/selection engine (_relative_strength_daily_features via _daily_ohlcv_from_frame) is code-traced to depend exclusively on daily OHLCV with zero path through 130-min data -- so, with SIP providing complete daily coverage plus this exception, residual affected_rebalance_decision_count is 0 (down from 3,304/3,445 baselines). One secondary, non-decision-affecting nuance remains and is not softened: generate_relative_strength_rotation_signals (backtest/execution simulation only, a different function than the ranking engine) reindexes onto the 130-min timestamp index, so a full historical backtest spanning this date would silently skip same-day mark-to-market for every symbol on this date -- a simulation continuity artifact, not a trading decision.",
+      "reviewed": true,
+      "timeframes_affected": [
+        "130min"
+      ]
+    },
+    {
+      "affected_date": "2022-04-06",
+      "affected_symbols": "ALL",
+      "approved_at": "2026-07-16",
+      "approved_by": "operator",
+      "evidence_hash": "2816b29977e816e2387cf7bfdd618318a5203d776cc51aac59fc8c9f0c0cd09f",
+      "evidence_reports": [
+        "reports/audit/data_source_decision_brief_20260716.md",
+        "reports/audit/sip_completeness_and_fetch_history_20260716.md",
+        "reports/audit/sip_residual_impact_20260716.md"
+      ],
+      "exception_type": "MISSING_INTERNAL_SESSION",
+      "rationale": "SIP full-session probe (scripts/alpaca_sip_full_session_probe.py, Phase 1.6) proved this session's 5-minute intraday bars remain severely or meaningfully partial on the SIP feed (2/78 to 49/78 expected bars, 37-97% missing) even though the daily bar is complete. This mirrors the IEX-feed gap documented in reports/audit/data_source_decision_brief_20260716.md and is not resolved by a feed change alone.",
+      "residual_impact_statement": "Per reports/audit/sip_residual_impact_20260716.md: this date is not a monthly rebalance signal date and not a next-open execution date (category (c), all 4 known dates), and the ranking/selection engine (_relative_strength_daily_features via _daily_ohlcv_from_frame) is code-traced to depend exclusively on daily OHLCV with zero path through 130-min data -- so, with SIP providing complete daily coverage plus this exception, residual affected_rebalance_decision_count is 0 (down from 3,304/3,445 baselines). One secondary, non-decision-affecting nuance remains and is not softened: generate_relative_strength_rotation_signals (backtest/execution simulation only, a different function than the ranking engine) reindexes onto the 130-min timestamp index, so a full historical backtest spanning this date would silently skip same-day mark-to-market for every symbol on this date -- a simulation continuity artifact, not a trading decision.",
+      "reviewed": true,
+      "timeframes_affected": [
+        "130min"
+      ]
+    }
+  ],
+  "schema_version": "2.0.0"
+}

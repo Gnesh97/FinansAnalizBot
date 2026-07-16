@@ -39,6 +39,24 @@ EXCEPTION_FIELDS = {
     "reviewed",
     "evidence_hash",
 }
+INTERNAL_SESSION_EXCEPTION_FIELDS = {
+    "exception_type",
+    "reviewed",
+    "evidence_hash",
+    "affected_date",
+    "affected_symbols",
+    "timeframes_affected",
+    "rationale",
+    "evidence_reports",
+    "residual_impact_statement",
+    "approved_by",
+    "approved_at",
+}
+EXCEPTION_SCHEMA_VERSIONS = {"1.0.0", "2.0.0"}
+EXCEPTION_TYPES_BY_SCHEMA_VERSION = {
+    "1.0.0": {"LATE_START", "EARLY_TERMINAL"},
+    "2.0.0": {"LATE_START", "EARLY_TERMINAL", "MISSING_INTERNAL_SESSION"},
+}
 
 
 def coverage_exception_evidence_hash(exception: dict) -> str:
@@ -47,24 +65,49 @@ def coverage_exception_evidence_hash(exception: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _required_exception_fields(exception_type: str) -> set[str] | None:
+    if exception_type == "LATE_START":
+        return EXCEPTION_FIELDS | {"approved_first_session"}
+    if exception_type == "EARLY_TERMINAL":
+        return EXCEPTION_FIELDS | {"approved_last_session"}
+    if exception_type == "MISSING_INTERNAL_SESSION":
+        return INTERNAL_SESSION_EXCEPTION_FIELDS
+    return None
+
+
 def load_reviewed_coverage_exceptions(path: Path) -> list[dict]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    schema_version = payload.get("schema_version")
     rows = payload.get("exceptions")
-    if payload.get("schema_version") != "1.0.0" or not isinstance(rows, list):
+    if schema_version not in EXCEPTION_SCHEMA_VERSIONS or not isinstance(rows, list):
         raise ValueError("V2_COVERAGE_EXCEPTION_FILE_INVALID")
+    allowed_types = EXCEPTION_TYPES_BY_SCHEMA_VERSION[schema_version]
     seen = set()
     for row in rows:
-        required = EXCEPTION_FIELDS | ({"approved_first_session"} if row.get("exception_type") == "LATE_START" else {"approved_last_session"})
+        exception_type = row.get("exception_type")
+        required = _required_exception_fields(exception_type)
         if (
-            not required.issubset(row)
-            or row.get("exception_type") not in {"LATE_START", "EARLY_TERMINAL"}
+            exception_type not in allowed_types
+            or required is None
+            or not required.issubset(row)
             or row.get("reviewed") is not True
             or row.get("evidence_hash") != coverage_exception_evidence_hash(row)
         ):
             raise ValueError("V2_COVERAGE_EXCEPTION_FILE_INVALID")
-        key = (str(row.get("symbol", "")).upper(), row["exception_type"])
-        if not key[0] or key in seen:
-            raise ValueError("V2_COVERAGE_EXCEPTION_FILE_INVALID")
+        if exception_type == "MISSING_INTERNAL_SESSION":
+            affected_symbols = row.get("affected_symbols")
+            symbols_key = "ALL" if affected_symbols == "ALL" else tuple(sorted(str(s).upper() for s in affected_symbols))
+            key = (
+                str(row.get("affected_date", "")),
+                symbols_key,
+                tuple(sorted(row.get("timeframes_affected", []))),
+            )
+            if not row.get("affected_date") or key in seen:
+                raise ValueError("V2_COVERAGE_EXCEPTION_FILE_INVALID")
+        else:
+            key = (str(row.get("symbol", "")).upper(), exception_type)
+            if not key[0] or key in seen:
+                raise ValueError("V2_COVERAGE_EXCEPTION_FILE_INVALID")
         seen.add(key)
     return rows
 
@@ -119,6 +162,31 @@ def _matching_exception(exceptions: Iterable[dict], symbol: str, kind: str) -> d
     return row
 
 
+def _approved_internal_session_exception_dates(exceptions: Iterable[dict], symbol: str, timeframe: str) -> set[pd.Timestamp]:
+    """Approved MISSING_INTERNAL_SESSION dates applicable to (symbol, timeframe).
+
+    An exception only ever suppresses a gap the coverage calculation has
+    independently detected; it never fabricates the absence of a real gap.
+    """
+    approved = set()
+    for row in exceptions:
+        if row.get("exception_type") != "MISSING_INTERNAL_SESSION":
+            continue
+        if row.get("reviewed") is not True or row.get("evidence_hash") != coverage_exception_evidence_hash(row):
+            continue
+        affected_symbols = row.get("affected_symbols")
+        symbol_matches = affected_symbols == "ALL" or (
+            isinstance(affected_symbols, list) and symbol.upper() in {str(s).upper() for s in affected_symbols}
+        )
+        if not symbol_matches or timeframe not in (row.get("timeframes_affected") or []):
+            continue
+        try:
+            approved.add(pd.Timestamp(row["affected_date"]).normalize())
+        except (KeyError, ValueError, TypeError):
+            continue
+    return approved
+
+
 def _expected_intraday_starts(schedule: pd.DataFrame) -> pd.DatetimeIndex:
     values = []
     for _, row in schedule.iterrows():
@@ -167,11 +235,16 @@ def calculate_v2_session_coverage(
     effective_last = last if early_approved and last is not None else expected_sessions.max()
     effective_schedule = schedule.loc[(schedule.index >= effective_first) & (schedule.index <= effective_last)]
 
+    approved_internal_dates = _approved_internal_session_exception_dates(reviewed_exceptions, symbol, timeframe)
     if first is None or last is None:
         missing_internal = 0
+        approved_internal_session_exception_dates: list[str] = []
     else:
         internal = expected_sessions[(expected_sessions >= first) & (expected_sessions <= last)]
-        missing_internal = len(set(internal) - actual_set)
+        missing_sessions = set(internal) - actual_set
+        approved_missing = {session for session in missing_sessions if session in approved_internal_dates}
+        missing_internal = len(missing_sessions - approved_missing)
+        approved_internal_session_exception_dates = sorted(str(session.date()) for session in approved_missing)
 
     reasons = []
     if start_gap:
@@ -182,6 +255,8 @@ def calculate_v2_session_coverage(
         reasons.append("UNEXPECTED_MARKET_SESSION")
     if missing_internal:
         reasons.append("MISSING_INTERNAL_SESSION")
+    if approved_internal_session_exception_dates:
+        reasons.append("APPROVED_MISSING_INTERNAL_SESSION")
 
     daily_count = len(valid_actual) if timeframe == "1D" else 0
     duplicate_daily = int(actual_dates.duplicated().sum()) if timeframe == "1D" else 0
@@ -224,6 +299,10 @@ def calculate_v2_session_coverage(
         "missing_intraday_bar_count": int(missing_intraday),
         "invalid_intraday_schedule_count": int(invalid_intraday),
         "duplicate_intraday_timestamp_count": duplicate_intraday,
+        # Informational only -- deliberately excluded from COVERAGE_FIELDS so it
+        # never participates in the strict manifest-vs-recomputed equality gate;
+        # approved exceptions must be visible in reports, never silently absorbed.
+        "approved_internal_session_exception_dates": approved_internal_session_exception_dates,
     }
 
 
