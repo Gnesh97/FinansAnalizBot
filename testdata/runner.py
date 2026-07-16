@@ -7585,32 +7585,59 @@ def validate_v2_clean_dataset(data_folder):
         raise ValueError(f"V2_DATASET_NOT_VALIDATED: immutable manifest parse failed: {e}")
     if latest.get("acquisition_run_id") != manifest.get("acquisition_run_id"):
         raise ValueError("V2_DATASET_NOT_VALIDATED: acquisition run id mismatch")
-    try:
+    profile = manifest.get("dataset_profile", "rs_v2_clean")
+    if profile == "rs_v2_sip":
         try:
-            from .vericekici_updated import validate_v2_manifest_and_files
-        except ImportError:
-            from vericekici_updated import validate_v2_manifest_and_files
-        validate_v2_manifest_and_files(folder, manifest)
-    except ValueError:
-        raise
-    except Exception as e:
-        raise ValueError(f"V2_DATASET_NOT_VALIDATED: shared manifest validator failed: {e}")
-    if manifest.get("strategy_identifier") != "rs_m126_top30_sma100_no_regime_v2_clean_stock":
-        raise ValueError("V2_DATASET_NOT_VALIDATED: strategy identifier mismatch")
-    if manifest.get("target_start_date") != "2020-07-27" or manifest.get("target_end_date") != "2026-07-07":
-        raise ValueError("V2_DATASET_NOT_VALIDATED: target period mismatch")
-    if manifest.get("dataset_profile") != "rs_v2_clean":
-        raise ValueError("V2_DATASET_NOT_VALIDATED: dataset_profile is not rs_v2_clean")
-    if manifest.get("adjustment") != "all":
-        raise ValueError("V2_DATASET_NOT_VALIDATED: adjustment is not all")
-    if manifest.get("feed") != "iex":
-        raise ValueError("V2_DATASET_NOT_VALIDATED: feed is not iex")
-    if manifest.get("candidate_universe_hash") != "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611":
-        raise ValueError("V2_DATASET_NOT_VALIDATED: candidate universe hash mismatch")
-    if manifest.get("candidate_count") != 178:
-        raise ValueError("V2_DATASET_NOT_VALIDATED: candidate count mismatch")
-    if manifest.get("status") != "COMPLETE_VALIDATED":
-        raise ValueError("V2_DATASET_NOT_VALIDATED: manifest status is not COMPLETE_VALIDATED")
+            try:
+                from .vericekici_updated import validate_v2_sip_manifest_and_files
+            except ImportError:
+                from vericekici_updated import validate_v2_sip_manifest_and_files
+            validate_v2_sip_manifest_and_files(folder, manifest)
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"V2_DATASET_NOT_VALIDATED: shared manifest validator failed: {e}")
+        if manifest.get("strategy_identifier") != "rs_m126_top30_sma100_no_regime_v2_clean_stock":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: strategy identifier mismatch")
+        if manifest.get("target_start_date") != "2020-07-27" or manifest.get("target_end_date") != "2026-07-07":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: target period mismatch")
+        if manifest.get("adjustment") != "all":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: adjustment is not all")
+        if manifest.get("feed") != "sip":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: feed is not sip")
+        if manifest.get("candidate_universe_hash") != "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: candidate universe hash mismatch")
+        if manifest.get("candidate_count") != 178:
+            raise ValueError("V2_DATASET_NOT_VALIDATED: candidate count mismatch")
+        if manifest.get("status") != "COMPLETE_VALIDATED":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: manifest status is not COMPLETE_VALIDATED")
+    else:
+        try:
+            try:
+                from .vericekici_updated import validate_v2_manifest_and_files
+            except ImportError:
+                from vericekici_updated import validate_v2_manifest_and_files
+            validate_v2_manifest_and_files(folder, manifest)
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"V2_DATASET_NOT_VALIDATED: shared manifest validator failed: {e}")
+        if manifest.get("strategy_identifier") != "rs_m126_top30_sma100_no_regime_v2_clean_stock":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: strategy identifier mismatch")
+        if manifest.get("target_start_date") != "2020-07-27" or manifest.get("target_end_date") != "2026-07-07":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: target period mismatch")
+        if manifest.get("dataset_profile") != "rs_v2_clean":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: dataset_profile is not rs_v2_clean")
+        if manifest.get("adjustment") != "all":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: adjustment is not all")
+        if manifest.get("feed") != "iex":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: feed is not iex")
+        if manifest.get("candidate_universe_hash") != "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: candidate universe hash mismatch")
+        if manifest.get("candidate_count") != 178:
+            raise ValueError("V2_DATASET_NOT_VALIDATED: candidate count mismatch")
+        if manifest.get("status") != "COMPLETE_VALIDATED":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: manifest status is not COMPLETE_VALIDATED")
 
     etfs = {
         "DIA", "IBB", "IWM", "QQQ", "RSP", "SMH", "SOXX", "SPY", "VTI", "XBI",
