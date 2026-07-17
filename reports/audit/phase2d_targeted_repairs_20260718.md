@@ -121,7 +121,13 @@ Reviewed directly (95-line diff, 3 files: one data-only JSON addition, one new ~
 
 ### F.4 Commits
 
-[TO BE FILLED IN AFTER COMMIT]
+| Hash | Message |
+|---|---|
+| `7b2fd77` | feat: add downloader completeness telemetry (RANGE_SHORTFALL warnings) |
+| `e5bb45d` | feat: add reviewed EARLY_TERMINAL exception for BK (BK->BNY ticker change) |
+| `e387ea5` | docs: add Phase 2C residual gap characterization and Phase 2D targeted repairs reports |
+
+All 3 on branch `checkpoint/research-framework-2026-07`, not pushed. Tree clean except the pre-existing untracked `.venv_linux/` and the gitignored data artifacts (`alpha_vantage_delisted.csv`, both manifest files) updated outside git.
 
 ---
 
