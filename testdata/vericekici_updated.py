@@ -433,6 +433,49 @@ def write_v2_applied_exceptions_report(file_records: list[dict], latest_dir: Pat
     return md_path, csv_path, applied_count
 
 
+RANGE_SHORTFALL_SESSION_THRESHOLD = 5
+
+
+def write_v2_range_shortfall_report(file_records: list[dict], latest_dir: Path, profile: str = "rs_v2_clean") -> tuple[Path, Path, int]:
+    """Surface any file whose returned data ends more than RANGE_SHORTFALL_SESSION_THRESHOLD
+    sessions short of the requested end date, unless an approved EARLY_TERMINAL
+    exception already accounts for the gap (a genuinely delisted/renamed symbol).
+
+    Telemetry only: never raises, never affects validation status. This exists
+    because acquisitions previously recorded request_status=SUCCESS with zero
+    completeness check against the requested range (see
+    reports/audit/phase2c_residual_gap_characterization_20260718.md Task B.1),
+    which is how BK's gap went unnoticed until manual investigation.
+    """
+    rows = []
+    for record in file_records:
+        reason = str(record.get("coverage_exception_reason", ""))
+        end_gap = int(record.get("end_gap_sessions", 0) or 0)
+        if end_gap > RANGE_SHORTFALL_SESSION_THRESHOLD and "APPROVED_EARLY_TERMINAL" not in reason.split(";"):
+            rows.append({
+                "symbol": record.get("symbol", ""),
+                "timeframe": record.get("timeframe", ""),
+                "requested_start": record.get("requested_start", ""),
+                "requested_end": record.get("requested_end", ""),
+                "returned_first_session": record.get("first_market_session", ""),
+                "returned_last_session": record.get("last_market_session", ""),
+                "shortfall_sessions": end_gap,
+                "warning_type": "RANGE_SHORTFALL",
+            })
+    latest_dir = Path(latest_dir)
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = latest_dir / f"{profile}_range_shortfall_warnings.csv"
+    md_path = latest_dir / f"{profile}_range_shortfall_warnings.md"
+    columns = ["symbol", "timeframe", "requested_start", "requested_end", "returned_first_session", "returned_last_session", "shortfall_sessions", "warning_type"]
+    pd.DataFrame(rows, columns=columns).to_csv(csv_path, index=False)
+    symbol_count = len({str(row["symbol"]) for row in rows})
+    title = "V2 SIP Range Shortfall Warnings" if profile == "rs_v2_sip" else "V2 Range Shortfall Warnings"
+    lines = [f"# {title}", "", f"- range_shortfall_symbol_count: {symbol_count}", f"- range_shortfall_record_count: {len(rows)}", f"- shortfall_session_threshold: {RANGE_SHORTFALL_SESSION_THRESHOLD}", "- note: telemetry only, does not affect validation status", ""]
+    lines.extend(f"- {row['symbol']} {row['timeframe']}: returned through {row['returned_last_session']}, requested through {row['requested_end']} ({row['shortfall_sessions']} sessions short)" for row in rows)
+    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return md_path, csv_path, symbol_count
+
+
 def write_v2_run_acquisition_report(run_dir: Path, latest_dir: Path, summary: dict, records: list[dict], profile: str = "rs_v2_clean") -> tuple[Path, Path]:
     """Write V2-only run diagnostics without touching the legacy refresh report."""
     required = {"acquisition_run_id", "dataset_profile", "refresh_mode", "symbol_count", "requested_start", "requested_end", "validation_status"}
@@ -2809,6 +2852,7 @@ def _main_impl() -> None:
 
         write_v2_coverage_review_reports(file_records, BASE_DIR / "reports" / "latest", profile=args.dataset_profile)
         write_v2_applied_exceptions_report(file_records, BASE_DIR / "reports" / "latest", profile=args.dataset_profile)
+        write_v2_range_shortfall_report(file_records, BASE_DIR / "reports" / "latest", profile=args.dataset_profile)
 
         manifest_data["status"] = "VALIDATION_PENDING"
         acquisition_report = {

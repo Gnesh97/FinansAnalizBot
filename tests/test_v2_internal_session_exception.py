@@ -16,7 +16,7 @@ from testdata.v2_session_coverage import (  # noqa: E402
     calculate_v2_session_coverage,
     load_reviewed_coverage_exceptions,
 )
-from testdata.vericekici_updated import write_v2_applied_exceptions_report  # noqa: E402
+from testdata.vericekici_updated import write_v2_applied_exceptions_report, write_v2_range_shortfall_report  # noqa: E402
 
 
 def _schedule(count: int = 130) -> pd.DataFrame:
@@ -280,6 +280,44 @@ class TestAppliedExceptionsReport(unittest.TestCase):
         record = {"symbol": "QQQ", "timeframe": "1D", "coverage_exception_reason": "UNAPPROVED_LATE_START"}
         with tempfile.TemporaryDirectory() as temp:
             _, _, count = write_v2_applied_exceptions_report([record], Path(temp))
+            self.assertEqual(count, 0)
+
+
+class TestRangeShortfallReport(unittest.TestCase):
+    def test_unapproved_shortfall_beyond_threshold_is_flagged(self):
+        record = {
+            "symbol": "BK", "timeframe": "1D", "requested_start": "2020-07-27", "requested_end": "2026-07-07",
+            "first_market_session": "2020-07-27", "last_market_session": "2026-05-20",
+            "end_gap_sessions": 31, "coverage_exception_reason": "UNAPPROVED_EARLY_TERMINAL",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            md_path, csv_path, count = write_v2_range_shortfall_report([record], Path(temp))
+            self.assertEqual(count, 1)
+            text = md_path.read_text(encoding="utf-8")
+            self.assertIn("telemetry only, does not affect validation status", text)
+            self.assertIn("BK 1D: returned through 2026-05-20, requested through 2026-07-07 (31 sessions short)", text)
+            row = pd.read_csv(csv_path).iloc[0]
+            self.assertEqual(row["warning_type"], "RANGE_SHORTFALL")
+            self.assertEqual(row["shortfall_sessions"], 31)
+
+    def test_approved_early_terminal_exception_suppresses_the_warning(self):
+        record = {
+            "symbol": "BK", "timeframe": "1D", "requested_start": "2020-07-27", "requested_end": "2026-07-07",
+            "first_market_session": "2020-07-27", "last_market_session": "2026-05-20",
+            "end_gap_sessions": 31, "coverage_exception_reason": "APPROVED_EARLY_TERMINAL",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            _, _, count = write_v2_range_shortfall_report([record], Path(temp))
+            self.assertEqual(count, 0)
+
+    def test_small_shortfall_within_threshold_is_not_flagged(self):
+        record = {
+            "symbol": "AAPL", "timeframe": "1D", "requested_start": "2020-07-27", "requested_end": "2026-07-07",
+            "first_market_session": "2020-07-27", "last_market_session": "2026-07-01",
+            "end_gap_sessions": 4, "coverage_exception_reason": "",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            _, _, count = write_v2_range_shortfall_report([record], Path(temp))
             self.assertEqual(count, 0)
 
 
