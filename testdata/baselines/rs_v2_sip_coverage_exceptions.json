@@ -159,6 +159,18 @@
       "reason": "PARA (Paramount Global) was delisted 2025-08-07 following completion of the Paramount-Skydance merger, after which the combined entity began trading under a different ticker. No SIP price history exists under the PARA symbol after this date.",
       "reviewed": true,
       "symbol": "PARA"
+    },
+    {
+      "symbol": "BK",
+      "exception_type": "EARLY_TERMINAL",
+      "approved_last_session": "2026-05-20",
+      "reason": "BK (The Bank of New York Mellon Corporation) changed its NYSE ticker symbol from BK to BNY, effective 2026-05-21 (announced 2026-05-11). Company/legal name and CUSIP are unchanged -- this is a ticker-symbol change, not a delisting of the underlying entity. No SIP price history exists under the BK symbol after 2026-05-20, the last trading day before the change took effect. Live re-query against Alpaca SIP on 2026-07-18 confirmed zero BK data for any date after 2026-05-20 (see reports/audit/phase2c_residual_gap_characterization_20260718.md Task B), ruling out a transient acquisition/download failure -- the absence is genuine and matches the announced ticker-change date. Recorded in testdata/research_data/alpha_vantage_delisted.csv as a rename entry. BNY is NOT added to the frozen candidate universe or acquired under this exception -- that is a separate, open operator decision.",
+      "evidence_source": "https://www.bny.com/corporate/global/en/about-us/newsroom/press-release/bny-announces-planned-change-of-stock-ticker-symbol-to-bny-130465.html",
+      "evidence_date": "2026-05-11",
+      "reviewed": true,
+      "approved_by": "operator (phase2d_targeted_repairs authorization)",
+      "approved_at": "2026-07-18",
+      "evidence_hash": "e5e3785a8537696db4f2b9e3d12ab6df5684fe9e1adb55a9ef59e974cf2a17a2"
     }
   ],
   "schema_version": "2.0.0"
