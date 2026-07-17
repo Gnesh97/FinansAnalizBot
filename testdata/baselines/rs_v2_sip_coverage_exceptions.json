@@ -75,6 +75,90 @@
       "timeframes_affected": [
         "130min"
       ]
+    },
+    {
+      "approved_at": "2026-07-17",
+      "approved_by": "operator (conditional, per phase2b_forensic_review remediation)",
+      "approved_first_session": "2020-12-10",
+      "evidence_date": "2020-12-10",
+      "evidence_hash": "c4ede669fd9f879a02da549cbafdb21bbe7d35f8be85d6a72566f3f5b4ed5e22",
+      "evidence_source": "Public IPO record (NASDAQ: ABNB, IPO date 2020-12-10); cross-checked against the actual first session present in testdata/research_data/rs_v2_sip_market_data/daily/ABNB_1D.csv, which matches exactly (2020-12-10).",
+      "exception_type": "LATE_START",
+      "reason": "ABNB (Airbnb, Inc.) completed its IPO and began trading on NASDAQ on 2020-12-10. No SIP price history can exist before this date because the security did not exist as a publicly traded instrument prior to listing.",
+      "reviewed": true,
+      "symbol": "ABNB"
+    },
+    {
+      "approved_at": "2026-07-17",
+      "approved_by": "operator (conditional, per phase2b_forensic_review remediation)",
+      "approved_first_session": "2020-09-30",
+      "evidence_date": "2020-09-30",
+      "evidence_hash": "14a1c47a4d39d2f7bfd8bed912078ebe10e1c7555083d3087059f22aa1279737",
+      "evidence_source": "Public direct-listing record (NYSE: PLTR, listing date 2020-09-30); cross-checked against the actual first session present in testdata/research_data/rs_v2_sip_market_data/daily/PLTR_1D.csv, which matches exactly (2020-09-30).",
+      "exception_type": "LATE_START",
+      "reason": "PLTR (Palantir Technologies Inc.) completed a direct listing and began trading on NYSE on 2020-09-30. No SIP price history can exist before this date because the security did not exist as a publicly traded instrument prior to listing.",
+      "reviewed": true,
+      "symbol": "PLTR"
+    },
+    {
+      "approved_at": "2026-07-17",
+      "approved_by": "operator (conditional, per phase2b_forensic_review remediation)",
+      "approved_first_session": "2021-03-10",
+      "evidence_date": "2021-03-10",
+      "evidence_hash": "5b5af063af2d9bc94db47fcf7e1b215f0fe9b13b7c90dd3028135cf63ca22631",
+      "evidence_source": "Public direct-listing record (NYSE: RBLX, listing date 2021-03-10); cross-checked against the actual first session present in testdata/research_data/rs_v2_sip_market_data/daily/RBLX_1D.csv, which matches exactly (2021-03-10).",
+      "exception_type": "LATE_START",
+      "reason": "RBLX (Roblox Corporation) completed a direct listing and began trading on NYSE on 2021-03-10. No SIP price history can exist before this date because the security did not exist as a publicly traded instrument prior to listing.",
+      "reviewed": true,
+      "symbol": "RBLX"
+    },
+    {
+      "approved_at": "2026-07-17",
+      "approved_by": "operator (conditional, per phase2b_forensic_review remediation)",
+      "approved_first_session": "2020-09-16",
+      "evidence_date": "2020-09-16",
+      "evidence_hash": "822ca44886d65cdcd0d2b775e5290e74052805c11f7e8932e5bd0140fa184324",
+      "evidence_source": "Public IPO record (NYSE: SNOW, IPO date 2020-09-16); cross-checked against the actual first session present in testdata/research_data/rs_v2_sip_market_data/daily/SNOW_1D.csv, which matches exactly (2020-09-16). The repo's alpha_vantage_delisted.csv SNOW row was checked and found to reference an unrelated prior company (ticker recycling) -- not used as evidence.",
+      "exception_type": "LATE_START",
+      "reason": "SNOW (Snowflake Inc.) completed its IPO and began trading on NYSE on 2020-09-16. No SIP price history can exist before this date because the security did not exist as a publicly traded instrument prior to listing. NOTE: testdata/research_data/alpha_vantage_delisted.csv contains an unrelated row for ticker SNOW ('Intrawest Resorts Holdings Inc', delisted 2017-08-01) from a prior, different company that used the same ticker before it was recycled; that row is explicitly NOT evidence for this exception and was rejected as a false match during review.",
+      "reviewed": true,
+      "symbol": "SNOW"
+    },
+    {
+      "approved_at": "2026-07-17",
+      "approved_by": "operator (conditional, per phase2b_forensic_review remediation)",
+      "approved_first_session": "2022-04-04",
+      "evidence_date": "2022-04-04",
+      "evidence_hash": "33edf3768a1c7d93a1aec2544efa1dad4482960dc914e6b66697aa1e0e242a36",
+      "evidence_source": "Public record of WarnerMedia-Discovery merger completion (2022-04-08) and WBD regular-way trading start (2022-04-11); actual first session in testdata/research_data/rs_v2_sip_market_data/daily/WBD_1D.csv is 2022-04-04, within the same merger-close week but not an exact match to the public regular-way date -- discrepancy disclosed, not resolved.",
+      "exception_type": "LATE_START",
+      "reason": "WBD (Warner Bros. Discovery, Inc.) came into existence via the WarnerMedia-Discovery merger, which completed 2022-04-08; the combined company's 'regular way' trading under ticker WBD is publicly documented as beginning 2022-04-11. The actual first SIP session for WBD is 2022-04-04, five trading days earlier than the widely-reported regular-way start date. This is most consistent with when-issued/early trading being included under the WBD symbol in the SIP feed around the merger-close week, a known pattern for merger-driven ticker launches, but this specific classification of the 2022-04-04 through 2022-04-08 bars could not be independently confirmed from data available in this repository. Approved on the strength of the underlying corporate event (merger completion the same week), not on exact-day certainty; flagged for operator awareness.",
+      "reviewed": true,
+      "symbol": "WBD"
+    },
+    {
+      "approved_at": "2026-07-17",
+      "approved_by": "operator (conditional, per phase2b_forensic_review remediation)",
+      "approved_first_session": "2022-02-17",
+      "evidence_date": "2022-02-17",
+      "evidence_hash": "c776dc45c2f9e9cd643e89cbf28b8f9b0ba4425beb9ac9801732a7772bba13f5",
+      "evidence_source": "Public record of the ViacomCBS -> Paramount Global rename and VIAC/VIACA -> PARA ticker change (effective Feb 2022); testdata/research_data/alpha_vantage_delisted.csv PARA row (ipoDate 2006-01-03) confirms continuous corporate lineage rather than a fresh listing; actual first PARA session in testdata/research_data/rs_v2_sip_market_data/daily/PARA_1D.csv is 2022-02-17, within days of the public rename date.",
+      "exception_type": "LATE_START",
+      "reason": "PARA is the renamed ticker for the entity previously trading as ViacomCBS (VIAC/VIACA); the corporate rename to Paramount Global and ticker change to PARA took effect 2022-02-15/16. No SIP price history exists under the PARA symbol before this rename. This is a ticker-continuity/rename event, not a new listing -- the underlying entity has traded continuously since 2006 (confirmed via testdata/research_data/alpha_vantage_delisted.csv PARA row, ipoDate 2006-01-03).",
+      "reviewed": true,
+      "symbol": "PARA"
+    },
+    {
+      "approved_at": "2026-07-17",
+      "approved_by": "operator (conditional, per phase2b_forensic_review remediation)",
+      "approved_last_session": "2025-08-06",
+      "evidence_date": "2025-08-07",
+      "evidence_hash": "d0d2fd972021a18a30f00f60cbe48dc832b51049b74740fed12c8761f8cc81ad",
+      "evidence_source": "testdata/research_data/alpha_vantage_delisted.csv PARA row: delistingDate=2025-08-07, status=Delisted. Actual last PARA session in testdata/research_data/rs_v2_sip_market_data/daily/PARA_1D.csv is 2025-08-06 -- the trading day immediately before the recorded delisting date, an exact match to the expected pattern.",
+      "exception_type": "EARLY_TERMINAL",
+      "reason": "PARA (Paramount Global) was delisted 2025-08-07 following completion of the Paramount-Skydance merger, after which the combined entity began trading under a different ticker. No SIP price history exists under the PARA symbol after this date.",
+      "reviewed": true,
+      "symbol": "PARA"
     }
   ],
   "schema_version": "2.0.0"
