@@ -125,7 +125,15 @@ No CLAUDE.md exists in this repository to check conventions against (only user-g
 
 ## 7. Commits
 
-[TO BE FILLED IN AFTER COMMIT]
+| Hash | Message |
+|---|---|
+| `fbf0372` | fix: remove coverage-failure swallow from both V2 manifest validators; restore SIP --live guard |
+| `aea868a` | fix: remove rs_v2_clean envelope bypass and hardcoded boundary-symbol approval; rework intraday coverage to detect-then-subtract |
+| `2a72752` | feat: add reviewed boundary-symbol exceptions for rs_v2_sip (ABNB, PLTR, RBLX, SNOW, WBD, PARA) |
+| `878b61f` | test: harden live-guard test against network; add 4 regression tests for the reverted violations |
+| `0e6e786` | docs: add Phase 2B forensic review and remediation reports |
+
+All 5 on branch `checkpoint/research-framework-2026-07`, not pushed. Tree is clean (`git status --short` shows only the pre-existing untracked `.venv_linux/`).
 
 ---
 
