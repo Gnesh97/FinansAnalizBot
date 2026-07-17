@@ -76,8 +76,24 @@ class TestSipProfileMandatoryFlags(unittest.TestCase):
         self._run(argv, "initial acquisition requires --overwrite")
 
     def test_live_forbids_refresh_skip_aggregate_only(self):
-        argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--adjustment", "all", "--feed", "sip", "--start", "2020-07-27", "--end", "2026-07-07", "--output-root", "unused", "--live", "--overwrite", "--refresh-latest"]
-        self._run(argv, "initial acquisition forbids refresh/skip/aggregate-only")
+        # Regression coverage for the ec47f13 incident: this guard was once silently
+        # commented out under an unrelated commit message, and a test that only
+        # asserted the ValueError (without blocking the network) let main() fall
+        # through into a real ~180-symbol live download that hung the test suite for
+        # 1.5-2h. Network/credentials are hard-mocked here so a guard regression fails
+        # fast with an assertion error instead of ever reaching real I/O again.
+        with tempfile.TemporaryDirectory() as temp:
+            argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--adjustment", "all", "--feed", "sip", "--start", "2020-07-27", "--end", "2026-07-07", "--output-root", temp, "--live", "--overwrite", "--refresh-latest"]
+            with patch("testdata.vericekici_updated.ensure_project_venv"), \
+                 patch("testdata.vericekici_updated.get_credentials") as credentials, \
+                 patch("testdata.vericekici_updated._load_alpaca") as alpaca, \
+                 patch("testdata.vericekici_updated.download_bars") as download, \
+                 patch.object(sys, "argv", argv), \
+                 self.assertRaisesRegex(ValueError, "initial acquisition forbids refresh/skip/aggregate-only"):
+                main()
+            credentials.assert_not_called()
+            alpaca.assert_not_called()
+            download.assert_not_called()
 
     def test_live_requires_target_dates(self):
         argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--adjustment", "all", "--feed", "sip", "--start", "2024-01-02", "--end", "2024-01-05", "--output-root", "unused", "--live", "--overwrite"]

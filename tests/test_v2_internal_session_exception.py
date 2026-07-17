@@ -33,6 +33,20 @@ def _daily(schedule: pd.DataFrame, sessions=None) -> pd.DataFrame:
     return pd.DataFrame({"Date": dates, "Open": [10.0] * size, "High": [11.0] * size, "Low": [9.0] * size, "Close": [10.5] * size, "Volume": [100] * size})
 
 
+def _intraday(schedule: pd.DataFrame, sessions=None) -> pd.DataFrame:
+    chosen = list(schedule.index if sessions is None else sessions)
+    dates = []
+    for day in chosen:
+        row = schedule.loc[day]
+        current = pd.Timestamp(row["market_open"])
+        close = pd.Timestamp(row["market_close"])
+        while current < close:
+            dates.append(current)
+            current += pd.Timedelta(minutes=130)
+    size = len(dates)
+    return pd.DataFrame({"Date": dates, "Open": [10.0] * size, "High": [11.0] * size, "Low": [9.0] * size, "Close": [10.5] * size, "Volume": [100] * size})
+
+
 def _coverage(frame, timeframe, schedule, exceptions=(), symbol="QQQ"):
     return calculate_v2_session_coverage(
         frame,
@@ -151,6 +165,44 @@ class TestInternalSessionExceptionApplication(unittest.TestCase):
         self.assertEqual(result["missing_internal_session_count"], 0)
         self.assertIn("APPROVED_MISSING_INTERNAL_SESSION", result["coverage_exception_reason"])
         self.assertEqual(result["approved_internal_session_exception_dates"], [str(missing_session.date())])
+
+    def test_approved_internal_gap_partial_intraday_session_is_detected_then_forgiven_not_excluded(self):
+        # Regression coverage for the 506bd3f incident: the exclusion previously
+        # removed an approved date from the *expected* intraday schedule entirely,
+        # so a partial (not fully missing) session on that date was structurally
+        # invisible to detection -- any missing bars beyond the approved gap would
+        # never be counted. This asserts the correct detect-then-subtract behavior:
+        # the gap is computed in full first, then only the approved date's missing
+        # bars are forgiven, and that forgiveness stays visible in the report.
+        schedule = _schedule()
+        partial_session = schedule.index[50]
+        row = schedule.loc[partial_session]
+        bar_starts = []
+        current = pd.Timestamp(row["market_open"])
+        close = pd.Timestamp(row["market_close"])
+        while current < close:
+            bar_starts.append(current)
+            current += pd.Timedelta(minutes=130)
+        self.assertGreaterEqual(len(bar_starts), 2, "fixture session must have at least 2 expected bars")
+        dropped_bar = bar_starts[-1]
+        complete_sessions = _intraday(schedule, schedule.index.delete(50))
+        kept_bars = [b for b in bar_starts if b != dropped_bar]
+        partial_frame = pd.DataFrame({
+            "Date": kept_bars,
+            "Open": [10.0] * len(kept_bars), "High": [11.0] * len(kept_bars),
+            "Low": [9.0] * len(kept_bars), "Close": [10.5] * len(kept_bars), "Volume": [100] * len(kept_bars),
+        })
+        frame = pd.concat([complete_sessions, partial_frame], ignore_index=True)
+        exception = _internal_session_exception(
+            affected_date=str(partial_session.date()), affected_symbols="ALL", timeframes_affected=["130min"]
+        )
+        result = _coverage(frame, "130min", schedule, [exception])
+        self.assertEqual(result["coverage_status"], "VALID")
+        self.assertEqual(result["missing_intraday_bar_count"], 0)
+        self.assertIn("APPROVED_MISSING_INTERNAL_SESSION", result["coverage_exception_reason"])
+        self.assertNotIn("MISSING_INTRADAY_BAR", result["coverage_exception_reason"])
+        self.assertEqual(result["approved_internal_session_exception_dates"], [str(partial_session.date())])
+        self.assertEqual(result["expected_intraday_bar_count"], len(bar_starts) + (len(schedule) - 1) * len(bar_starts))
 
     def test_exception_scoped_to_explicit_symbol_list_does_not_apply_to_other_symbols(self):
         schedule = _schedule()

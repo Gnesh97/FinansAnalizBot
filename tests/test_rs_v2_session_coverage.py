@@ -179,6 +179,24 @@ class TestV2SessionCoverage(unittest.TestCase):
         self.assertIn("UNAPPROVED_LATE_START", result["coverage_exception_reason"])
         self.assertEqual(result["coverage_status"], "FAIL")
 
+    def test_former_boundary_symbol_without_reviewed_exception_still_fails(self):
+        # Regression coverage for the 778555d incident: ABNB was one of 7 symbols
+        # hardcoded as unconditionally "approved" for LATE_START/EARLY_TERMINAL with
+        # no reviewed-exception record backing it. This asserts that with zero
+        # exceptions present, a symbol from that former hardcoded set gets no special
+        # treatment and fails exactly like any other symbol would.
+        schedule = _schedule()
+        frame = _daily(schedule.iloc[1:])
+        result = calculate_v2_session_coverage(
+            frame, timeframe="1D", symbol="ABNB",
+            target_start="2024-01-02", target_end="2024-12-31",
+            market_schedule=schedule, reviewed_exceptions=[],
+        )
+        reasons = result["coverage_exception_reason"].split(";")
+        self.assertIn("UNAPPROVED_LATE_START", reasons)
+        self.assertNotIn("APPROVED_LATE_START", reasons)
+        self.assertEqual(result["coverage_status"], "FAIL")
+
     def test_approved_late_start_relaxes_only_start_boundary(self):
         schedule = _schedule()
         first = str(schedule.index[1].date())
@@ -321,6 +339,40 @@ class TestV2SessionCoverage(unittest.TestCase):
             record = _coverage(frame, "1D", schedule, [_exception("LATE_START", first)])
             with self.assertRaisesRegex(ValueError, "OHLCV integrity"):
                 validate_v2_file_coverage(path, record, "QQQ", "1D", "2024-01-02", "2024-12-31", reviewed_exceptions=[_exception("LATE_START", first)], market_schedule=schedule)
+
+    def test_envelope_broken_rs_v2_clean_path_still_raises(self):
+        # Regression coverage for the aef661d incident: a broken OHLCV envelope
+        # (here, High < Low) was silently allowed through for any file path
+        # containing the substring "rs_v2_clean". This asserts the check applies
+        # regardless of path.
+        schedule = _schedule()
+        first = str(schedule.index[1].date())
+        frame = _daily(schedule.iloc[1:])
+        frame.loc[0, "High"] = 1.0
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "rs_v2_clean_market_data" / "daily" / "QQQ_1D.csv"
+            path.parent.mkdir(parents=True)
+            frame.to_csv(path, index=False)
+            record = _coverage(frame, "1D", schedule, [_exception("LATE_START", first)])
+            with self.assertRaisesRegex(ValueError, "OHLCV integrity"):
+                validate_v2_file_coverage(path, record, "QQQ", "1D", "2024-01-02", "2024-12-31", reviewed_exceptions=[_exception("LATE_START", first)], market_schedule=schedule)
+
+    def test_coverage_fail_rs_v2_clean_path_still_raises(self):
+        # Regression coverage for the c0340ad/506bd3f incident: a coverage_status of
+        # FAIL was silently swallowed by the manifest validators (not this function),
+        # but the swallow was keyed off the exact string this function raises. This
+        # locks in that validate_v2_file_coverage itself always raises on FAIL,
+        # including at a path containing "rs_v2_clean", regardless of what any caller
+        # does with the exception.
+        schedule = _schedule()
+        frame = _daily(schedule.iloc[1:])  # unapproved late start -> coverage FAIL
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "rs_v2_clean_market_data" / "daily" / "QQQ_1D.csv"
+            path.parent.mkdir(parents=True)
+            frame.to_csv(path, index=False)
+            record = _coverage(frame, "1D", schedule)
+            with self.assertRaisesRegex(ValueError, "coverage failed"):
+                validate_v2_file_coverage(path, record, "QQQ", "1D", "2024-01-02", "2024-12-31", market_schedule=schedule)
 
     def test_retry_rejects_zero_attempts(self):
         with self.assertRaisesRegex(ValueError, "at least 1"):
