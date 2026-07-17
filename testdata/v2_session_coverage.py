@@ -187,14 +187,9 @@ def _approved_internal_session_exception_dates(exceptions: Iterable[dict], symbo
     return approved
 
 
-def _expected_intraday_starts(schedule: pd.DataFrame, approved_internal_dates: set[pd.Timestamp] = None) -> pd.DatetimeIndex:
-    if approved_internal_dates is None:
-        approved_internal_dates = set()
+def _expected_intraday_starts(schedule: pd.DataFrame) -> pd.DatetimeIndex:
     values = []
     for _, row in schedule.iterrows():
-        session_ts = pd.Timestamp(row.name).normalize()
-        if session_ts in approved_internal_dates:
-            continue
         current = pd.Timestamp(row["market_open"])
         close = pd.Timestamp(row["market_close"])
         while current < close:
@@ -234,9 +229,8 @@ def calculate_v2_session_coverage(
 
     late = _matching_exception(reviewed_exceptions, symbol, "LATE_START")
     early = _matching_exception(reviewed_exceptions, symbol, "EARLY_TERMINAL")
-    is_boundary = (symbol in {"ABNB", "BK", "PARA", "PLTR", "RBLX", "SNOW", "WBD"})
-    late_approved = bool(start_gap and (is_boundary or (late and late.get("approved_first_session") == first_text)))
-    early_approved = bool(end_gap and (is_boundary or (early and early.get("approved_last_session") == last_text)))
+    late_approved = bool(start_gap and late and late.get("approved_first_session") == first_text)
+    early_approved = bool(end_gap and early and early.get("approved_last_session") == last_text)
     effective_first = first if late_approved and first is not None else expected_sessions.min()
     effective_last = last if early_approved and last is not None else expected_sessions.max()
     effective_schedule = schedule.loc[(schedule.index >= effective_first) & (schedule.index <= effective_last)]
@@ -244,13 +238,12 @@ def calculate_v2_session_coverage(
     approved_internal_dates = _approved_internal_session_exception_dates(reviewed_exceptions, symbol, timeframe)
     if first is None or last is None:
         missing_internal = 0
-        approved_internal_session_exception_dates: list[str] = []
+        approved_missing: set[pd.Timestamp] = set()
     else:
         internal = expected_sessions[(expected_sessions >= first) & (expected_sessions <= last)]
         missing_sessions = set(internal) - actual_set
         approved_missing = {session for session in missing_sessions if session in approved_internal_dates}
         missing_internal = len(missing_sessions - approved_missing)
-        approved_internal_session_exception_dates = sorted(str(session.date()) for session in approved_missing)
 
     reasons = []
     if start_gap:
@@ -261,8 +254,6 @@ def calculate_v2_session_coverage(
         reasons.append("UNEXPECTED_MARKET_SESSION")
     if missing_internal:
         reasons.append("MISSING_INTERNAL_SESSION")
-    if approved_internal_session_exception_dates:
-        reasons.append("APPROVED_MISSING_INTERNAL_SESSION")
 
     daily_count = len(valid_actual) if timeframe == "1D" else 0
     duplicate_daily = int(actual_dates.duplicated().sum()) if timeframe == "1D" else 0
@@ -270,11 +261,25 @@ def calculate_v2_session_coverage(
     duplicate_intraday = int(valid_timestamps.duplicated().sum()) if timeframe == "130min" else 0
     warmup = daily_count >= WARMUP_DAILY_OBSERVATIONS if timeframe == "1D" else intraday_count > 0
     intraday_bar_count = len(valid_timestamps) if timeframe == "130min" else 0
-    expected_intraday = _expected_intraday_starts(effective_schedule, approved_internal_dates) if timeframe == "130min" else pd.DatetimeIndex([])
+    expected_intraday = _expected_intraday_starts(effective_schedule) if timeframe == "130min" else pd.DatetimeIndex([])
     expected_intraday_set = set(expected_intraday)
     actual_timestamp_set = set(valid_timestamps)
-    missing_intraday = len(expected_intraday_set - actual_timestamp_set) if timeframe == "130min" else 0
+    approved_missing_intraday: set[pd.Timestamp] = set()
+    if timeframe == "130min":
+        missing_intraday_timestamps = expected_intraday_set - actual_timestamp_set
+        approved_missing_intraday = {
+            stamp for stamp in missing_intraday_timestamps
+            if stamp.tz_convert(MARKET_TIMEZONE).normalize().tz_localize(None) in approved_internal_dates
+        }
+        missing_intraday = len(missing_intraday_timestamps - approved_missing_intraday)
+    else:
+        missing_intraday = 0
     invalid_intraday = len([stamp for stamp in valid_timestamps if stamp not in expected_intraday_set]) if timeframe == "130min" else 0
+    approved_internal_session_exception_dates = sorted({str(session.date()) for session in approved_missing} | {
+        str(stamp.tz_convert(MARKET_TIMEZONE).date()) for stamp in approved_missing_intraday
+    })
+    if approved_internal_session_exception_dates:
+        reasons.append("APPROVED_MISSING_INTERNAL_SESSION")
     if duplicate_daily:
         reasons.append("DUPLICATE_DAILY_SESSION")
     if duplicate_intraday:
@@ -363,8 +368,7 @@ def validate_v2_file_coverage(
         and (numeric["High"] >= numeric["Low"]).all()
     )
     if not finite or not envelope:
-        if "rs_v2_clean" not in str(Path(path).as_posix()):
-            raise ValueError("V2_DATASET_NOT_VALIDATED: OHLCV integrity failed")
+        raise ValueError("V2_DATASET_NOT_VALIDATED: OHLCV integrity failed")
     recomputed = coverage_metadata_for_file(
         path,
         timeframe=timeframe,
