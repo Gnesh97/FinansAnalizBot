@@ -214,9 +214,7 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
         "candidate_count": len(candidates), "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
         "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0,
     }
-    other_keys_match = all(manifest.get(key) == value for key, value in exact.items() if key != "target_end_date")
-    target_end_date_valid = (manifest.get("target_end_date") >= "2026-07-07")
-    if not other_keys_match or not target_end_date_valid or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
+    if any(manifest.get(key) != value for key, value in exact.items()) or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
     validate_v2_retry_telemetry(manifest)
     expected = {(row["symbol"], row["timeframe"]): row for row in build_v2_acquisition_plan(root, candidates, manifest.get("target_start_date"), manifest.get("target_end_date"), "iex", "all")}
@@ -231,7 +229,7 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
     exceptions = load_reviewed_coverage_exceptions(V2_COVERAGE_EXCEPTIONS_PATH)
     for key, expected_record in expected.items():
         record = actual[key]
-        if (record.get("asset_role") != expected_record["asset_role"] or record.get("output_relative_path") != expected_record["output_relative_path"] or record.get("requested_start") != exact["target_start_date"] or record.get("requested_end") != manifest.get("target_end_date") or record.get("feed") != "iex" or record.get("adjustment") != "all" or record.get("acquisition_run_id") != manifest["acquisition_run_id"]):
+        if (record.get("asset_role") != expected_record["asset_role"] or record.get("output_relative_path") != expected_record["output_relative_path"] or record.get("requested_start") != exact["target_start_date"] or record.get("requested_end") != exact["target_end_date"] or record.get("feed") != "iex" or record.get("adjustment") != "all" or record.get("acquisition_run_id") != manifest["acquisition_run_id"]):
             raise ValueError("V2_DATASET_NOT_VALIDATED: role/path mismatch")
         path = root / record["output_relative_path"]
         integrity = verify_file_integrity(path)
@@ -240,12 +238,8 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
         if not COVERAGE_FIELDS.issubset(record):
             raise ValueError("V2_DATASET_NOT_VALIDATED: missing coverage metadata")
         if record["timeframe"] == "1D":
-            if manifest.get("refresh_daily"):
-                if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("provider_result_status") not in {"DOWNLOADED", "REFRESHED", "SKIPPED"}:
-                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
-            else:
-                if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
-                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
+            if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
+                raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
         if record["timeframe"] == "130min":
             raw_relative = record.get("source_raw_5min_relative_path", "")
             expected_raw_relative = resolve_v2_dataset_paths(root, record["symbol"]).raw_5min.relative_to(root).as_posix()
@@ -255,19 +249,15 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
             raw_integrity = verify_file_integrity(raw)
             if raw_integrity["data_status"] != "VALID" or raw_integrity["sha256"] != record.get("source_raw_5min_sha256") or raw_integrity["row_count"] != record.get("source_raw_5min_row_count") or integrity["row_count"] != record.get("derived_row_count") or record.get("derivation_status") != "SUCCESS":
                 raise ValueError("V2_DATASET_NOT_VALIDATED: raw-to-130min lineage mismatch")
-            if manifest.get("refresh_daily"):
-                if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("aggregation_result_status") not in {"BUILT", "SKIPPED"}:
-                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
-            else:
-                if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("raw_downloaded_in_current_run") is not True or record.get("aggregation_result_status") != "BUILT":
-                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
-    market_schedule = approved_nyse_schedule(exact["target_start_date"], manifest.get("target_end_date"))
+            if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("raw_downloaded_in_current_run") is not True or record.get("aggregation_result_status") != "BUILT":
+                raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
+    market_schedule = approved_nyse_schedule(exact["target_start_date"], exact["target_end_date"])
     recomputed_by_symbol = {}
     for key in expected:
         record = actual[key]
         path = root / record["output_relative_path"]
         coverage = validate_v2_file_coverage(
-            path, record, record["symbol"], record["timeframe"], exact["target_start_date"], manifest.get("target_end_date"),
+            path, record, record["symbol"], record["timeframe"], exact["target_start_date"], exact["target_end_date"],
             reviewed_exceptions=exceptions, market_schedule=market_schedule,
         )
         recomputed_by_symbol.setdefault(record["symbol"], {})[record["timeframe"]] = coverage
@@ -290,7 +280,11 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
         "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0,
     }
     other_keys_match = all(manifest.get(key) == value for key, value in exact.items() if key != "target_end_date")
-    target_end_date_valid = (manifest.get("target_end_date") >= "2026-07-07")
+    if manifest.get("refresh_daily"):
+        target_end_date = manifest.get("target_end_date")
+        target_end_date_valid = isinstance(target_end_date, str) and target_end_date >= exact["target_end_date"]
+    else:
+        target_end_date_valid = manifest.get("target_end_date") == exact["target_end_date"]
     if not other_keys_match or not target_end_date_valid or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
     validate_v2_retry_telemetry(manifest)
@@ -307,15 +301,6 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
     for key, expected_record in expected.items():
         record = actual[key]
         if (record.get("asset_role") != expected_record["asset_role"] or record.get("output_relative_path") != expected_record["output_relative_path"] or record.get("requested_start") != exact["target_start_date"] or record.get("requested_end") != manifest.get("target_end_date") or record.get("feed") != "sip" or record.get("adjustment") != "all" or record.get("acquisition_run_id") != manifest["acquisition_run_id"]):
-            print("ROLE/PATH MISMATCH DETAIL:")
-            print("Key:", key)
-            print("Record asset_role:", record.get("asset_role"), "Expected:", expected_record.get("asset_role"))
-            print("Record output_relative_path:", record.get("output_relative_path"), "Expected:", expected_record.get("output_relative_path"))
-            print("Record requested_start:", record.get("requested_start"), "Expected (exact target_start_date):", exact.get("target_start_date"))
-            print("Record requested_end:", record.get("requested_end"), "Expected (manifest target_end_date):", manifest.get("target_end_date"))
-            print("Record feed:", record.get("feed"), "Expected: sip")
-            print("Record adjustment:", record.get("adjustment"), "Expected: all")
-            print("Record acquisition_run_id:", record.get("acquisition_run_id"), "Expected (manifest acquisition_run_id):", manifest.get("acquisition_run_id"))
             raise ValueError("V2_DATASET_NOT_VALIDATED: role/path mismatch")
         path = root / record["output_relative_path"]
         integrity = verify_file_integrity(path)
@@ -2472,6 +2457,10 @@ def _main_impl() -> None:
         if args.refresh_daily:
             if args.refresh_latest:
                 raise ValueError("Cannot specify both --refresh-daily and --refresh-latest")
+            if args.skip_download or args.only_aggregate_130min:
+                raise ValueError("V2 SIP daily refresh forbids --skip-download and --only-aggregate-130min")
+            if args.dry_run:
+                raise ValueError("V2 SIP daily refresh forbids --dry-run (refresh-daily is always a live acquisition)")
             if not args.feed:
                 args.feed = "sip"
             if args.feed != "sip":
