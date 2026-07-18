@@ -13,6 +13,8 @@ from testdata.vericekici_updated import (  # noqa: E402
     DEFAULT_V2_SIP_FROZEN_ROOT,
     V2_COVERAGE_EXCEPTIONS_PATH,
     V2_SIP_COVERAGE_EXCEPTIONS_PATH,
+    DownloadBarsResult,
+    _download_symbol_worker,
     main,
 )
 
@@ -173,6 +175,151 @@ class TestOutputRootIsolation(unittest.TestCase):
             with patch.object(sys, "argv", argv), self.assertRaises(SystemExit):
                 main()
             self.assertFalse((DEFAULT_V2_FROZEN_ROOT / "dry_run_reports").exists())
+
+
+
+class TestSipAdjustmentDriftDetection(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.output_root = Path(self.temp_dir.name)
+        
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    @patch("testdata.vericekici_updated.download_bars_with_retry")
+    def test_drift_detection_triggers_full_history_reacquisition(self, mock_download):
+        symbol = "AAPL"
+        daily_path = self.output_root / "daily" / f"{symbol}_1D.csv"
+        raw_path = self.output_root / "raw_5min" / f"{symbol}_5min.csv"
+        daily_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        df_old = pd.DataFrame([
+            {"Date": "2026-06-11 04:00:00+00:00", "Open": 46.0, "High": 47.0, "Low": 45.0, "Close": 46.84, "Volume": 10000}
+        ])
+        df_old.to_csv(daily_path, index=False)
+        pd.DataFrame([
+            {"Date": "2026-06-11 13:30:00+00:00", "Open": 46.0, "High": 47.0, "Low": 45.0, "Close": 46.84, "Volume": 10000}
+        ]).to_csv(raw_path, index=False)
+        
+        df_new_trailing = pd.DataFrame([
+            {"Date": "2026-06-11 04:00:00+00:00", "Open": 140.0, "High": 141.0, "Low": 139.0, "Close": 140.52, "Volume": 10000}
+        ])
+        
+        df_new_full_daily = pd.DataFrame([
+            {"Date": "2026-06-11 04:00:00+00:00", "Open": 140.0, "High": 141.0, "Low": 139.0, "Close": 140.52, "Volume": 10000},
+            {"Date": "2026-06-12 04:00:00+00:00", "Open": 141.0, "High": 142.0, "Low": 140.0, "Close": 141.50, "Volume": 12000}
+        ])
+        
+        df_new_full_raw = pd.DataFrame([
+            {"Date": "2026-06-11 13:30:00+00:00", "Open": 140.0, "High": 141.0, "Low": 139.0, "Close": 140.52, "Volume": 10000},
+            {"Date": "2026-06-12 13:30:00+00:00", "Open": 141.0, "High": 142.0, "Low": 140.0, "Close": 141.50, "Volume": 12000}
+        ])
+        
+        mock_download.side_effect = [
+            DownloadBarsResult(df_new_trailing, 1, 0, 0),
+            DownloadBarsResult(df_new_full_daily, 1, 0, 0),
+            DownloadBarsResult(df_new_full_raw, 1, 0, 0)
+        ]
+        
+        payload = {
+            "symbol": symbol,
+            "daily_path": str(daily_path),
+            "raw_path": str(raw_path),
+            "api_key": "dummy",
+            "secret_key": "dummy",
+            "feed": "sip",
+            "adjustment": "all",
+            "day_tf": "1D",
+            "min5_tf": "5min",
+            "daily_start": pd.Timestamp("2026-06-11", tz="UTC").to_pydatetime(),
+            "intraday_start": pd.Timestamp("2026-06-11", tz="UTC").to_pydatetime(),
+            "daily_end": pd.Timestamp("2026-06-12", tz="UTC").to_pydatetime(),
+            "intraday_end": pd.Timestamp("2026-06-12", tz="UTC").to_pydatetime(),
+            "refresh_latest": False,
+            "refresh_daily": True,
+            "drift_check_start": pd.Timestamp("2026-06-11", tz="UTC").to_pydatetime(),
+            "overwrite": False,
+            "skip_download": False,
+            "allow_row_count_reduction": True
+        }
+        
+        result = _download_symbol_worker(payload)
+        
+        self.assertEqual(mock_download.call_count, 3)
+        self.assertEqual(result["daily_status"], "downloaded")
+        self.assertEqual(result["raw_5min_status"], "downloaded")
+        
+        updated_daily = pd.read_csv(daily_path)
+        self.assertEqual(len(updated_daily), 2)
+        self.assertEqual(float(updated_daily.iloc[0]["Close"]), 140.52)
+        
+    @patch("testdata.vericekici_updated.download_bars_with_retry")
+    def test_clean_overlap_does_not_trigger_full_history_reacquisition(self, mock_download):
+        symbol = "AAPL"
+        daily_path = self.output_root / "daily" / f"{symbol}_1D.csv"
+        raw_path = self.output_root / "raw_5min" / f"{symbol}_5min.csv"
+        daily_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        df_old = pd.DataFrame([
+            {"Date": "2026-06-11 04:00:00+00:00", "Open": 140.0, "High": 141.0, "Low": 139.0, "Close": 140.52, "Volume": 10000}
+        ])
+        df_old.to_csv(daily_path, index=False)
+        pd.DataFrame([
+            {"Date": "2026-06-11 13:30:00+00:00", "Open": 140.0, "High": 141.0, "Low": 139.0, "Close": 140.52, "Volume": 10000}
+        ]).to_csv(raw_path, index=False)
+        
+        df_new_trailing = pd.DataFrame([
+            {"Date": "2026-06-11 04:00:00+00:00", "Open": 140.0, "High": 141.0, "Low": 139.0, "Close": 140.52, "Volume": 10000}
+        ])
+        
+        df_incremental_daily = pd.DataFrame([
+            {"Date": "2026-06-12 04:00:00+00:00", "Open": 141.0, "High": 142.0, "Low": 140.0, "Close": 141.50, "Volume": 12000}
+        ])
+        
+        df_incremental_raw = pd.DataFrame([
+            {"Date": "2026-06-12 13:30:00+00:00", "Open": 141.0, "High": 142.0, "Low": 140.0, "Close": 141.50, "Volume": 12000}
+        ])
+        
+        mock_download.side_effect = [
+            DownloadBarsResult(df_new_trailing, 1, 0, 0),
+            DownloadBarsResult(df_incremental_daily, 1, 0, 0),
+            DownloadBarsResult(df_incremental_raw, 1, 0, 0)
+        ]
+        
+        payload = {
+            "symbol": symbol,
+            "daily_path": str(daily_path),
+            "raw_path": str(raw_path),
+            "api_key": "dummy",
+            "secret_key": "dummy",
+            "feed": "sip",
+            "adjustment": "all",
+            "day_tf": "1D",
+            "min5_tf": "5min",
+            "daily_start": pd.Timestamp("2026-06-11", tz="UTC").to_pydatetime(),
+            "intraday_start": pd.Timestamp("2026-06-11", tz="UTC").to_pydatetime(),
+            "daily_end": pd.Timestamp("2026-06-12", tz="UTC").to_pydatetime(),
+            "intraday_end": pd.Timestamp("2026-06-12", tz="UTC").to_pydatetime(),
+            "refresh_latest": False,
+            "refresh_daily": True,
+            "drift_check_start": pd.Timestamp("2026-06-11", tz="UTC").to_pydatetime(),
+            "overwrite": False,
+            "skip_download": False,
+            "allow_row_count_reduction": True
+        }
+        
+        result = _download_symbol_worker(payload)
+        
+        self.assertEqual(mock_download.call_count, 3)
+        self.assertEqual(result["daily_status"], "refreshed")
+        self.assertEqual(result["raw_5min_status"], "refreshed")
+        
+        updated_daily = pd.read_csv(daily_path)
+        self.assertEqual(len(updated_daily), 2)
+        self.assertEqual(float(updated_daily.iloc[0]["Close"]), 140.52)
+        self.assertEqual(float(updated_daily.iloc[1]["Close"]), 141.50)
 
 
 if __name__ == "__main__":

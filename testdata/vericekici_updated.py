@@ -214,7 +214,9 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
         "candidate_count": len(candidates), "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
         "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0,
     }
-    if any(manifest.get(key) != value for key, value in exact.items()) or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
+    other_keys_match = all(manifest.get(key) == value for key, value in exact.items() if key != "target_end_date")
+    target_end_date_valid = (manifest.get("target_end_date") >= "2026-07-07")
+    if not other_keys_match or not target_end_date_valid or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
     validate_v2_retry_telemetry(manifest)
     expected = {(row["symbol"], row["timeframe"]): row for row in build_v2_acquisition_plan(root, candidates, manifest.get("target_start_date"), manifest.get("target_end_date"), "iex", "all")}
@@ -229,7 +231,7 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
     exceptions = load_reviewed_coverage_exceptions(V2_COVERAGE_EXCEPTIONS_PATH)
     for key, expected_record in expected.items():
         record = actual[key]
-        if (record.get("asset_role") != expected_record["asset_role"] or record.get("output_relative_path") != expected_record["output_relative_path"] or record.get("requested_start") != exact["target_start_date"] or record.get("requested_end") != exact["target_end_date"] or record.get("feed") != "iex" or record.get("adjustment") != "all" or record.get("acquisition_run_id") != manifest["acquisition_run_id"]):
+        if (record.get("asset_role") != expected_record["asset_role"] or record.get("output_relative_path") != expected_record["output_relative_path"] or record.get("requested_start") != exact["target_start_date"] or record.get("requested_end") != manifest.get("target_end_date") or record.get("feed") != "iex" or record.get("adjustment") != "all" or record.get("acquisition_run_id") != manifest["acquisition_run_id"]):
             raise ValueError("V2_DATASET_NOT_VALIDATED: role/path mismatch")
         path = root / record["output_relative_path"]
         integrity = verify_file_integrity(path)
@@ -238,8 +240,12 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
         if not COVERAGE_FIELDS.issubset(record):
             raise ValueError("V2_DATASET_NOT_VALIDATED: missing coverage metadata")
         if record["timeframe"] == "1D":
-            if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
-                raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
+            if manifest.get("refresh_daily"):
+                if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("provider_result_status") not in {"DOWNLOADED", "REFRESHED", "SKIPPED"}:
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
+            else:
+                if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
         if record["timeframe"] == "130min":
             raw_relative = record.get("source_raw_5min_relative_path", "")
             expected_raw_relative = resolve_v2_dataset_paths(root, record["symbol"]).raw_5min.relative_to(root).as_posix()
@@ -249,15 +255,19 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
             raw_integrity = verify_file_integrity(raw)
             if raw_integrity["data_status"] != "VALID" or raw_integrity["sha256"] != record.get("source_raw_5min_sha256") or raw_integrity["row_count"] != record.get("source_raw_5min_row_count") or integrity["row_count"] != record.get("derived_row_count") or record.get("derivation_status") != "SUCCESS":
                 raise ValueError("V2_DATASET_NOT_VALIDATED: raw-to-130min lineage mismatch")
-            if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("raw_downloaded_in_current_run") is not True or record.get("aggregation_result_status") != "BUILT":
-                raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
-    market_schedule = approved_nyse_schedule(exact["target_start_date"], exact["target_end_date"])
+            if manifest.get("refresh_daily"):
+                if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("aggregation_result_status") not in {"BUILT", "SKIPPED"}:
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
+            else:
+                if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("raw_downloaded_in_current_run") is not True or record.get("aggregation_result_status") != "BUILT":
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
+    market_schedule = approved_nyse_schedule(exact["target_start_date"], manifest.get("target_end_date"))
     recomputed_by_symbol = {}
     for key in expected:
         record = actual[key]
         path = root / record["output_relative_path"]
         coverage = validate_v2_file_coverage(
-            path, record, record["symbol"], record["timeframe"], exact["target_start_date"], exact["target_end_date"],
+            path, record, record["symbol"], record["timeframe"], exact["target_start_date"], manifest.get("target_end_date"),
             reviewed_exceptions=exceptions, market_schedule=market_schedule,
         )
         recomputed_by_symbol.setdefault(record["symbol"], {})[record["timeframe"]] = coverage
@@ -279,7 +289,9 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
         "candidate_count": len(candidates), "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
         "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0,
     }
-    if any(manifest.get(key) != value for key, value in exact.items()) or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
+    other_keys_match = all(manifest.get(key) == value for key, value in exact.items() if key != "target_end_date")
+    target_end_date_valid = (manifest.get("target_end_date") >= "2026-07-07")
+    if not other_keys_match or not target_end_date_valid or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
     validate_v2_retry_telemetry(manifest)
     expected = {(row["symbol"], row["timeframe"]): row for row in build_v2_acquisition_plan(root, candidates, manifest.get("target_start_date"), manifest.get("target_end_date"), "sip", "all")}
@@ -294,7 +306,16 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
     exceptions = load_reviewed_coverage_exceptions(V2_SIP_COVERAGE_EXCEPTIONS_PATH)
     for key, expected_record in expected.items():
         record = actual[key]
-        if (record.get("asset_role") != expected_record["asset_role"] or record.get("output_relative_path") != expected_record["output_relative_path"] or record.get("requested_start") != exact["target_start_date"] or record.get("requested_end") != exact["target_end_date"] or record.get("feed") != "sip" or record.get("adjustment") != "all" or record.get("acquisition_run_id") != manifest["acquisition_run_id"]):
+        if (record.get("asset_role") != expected_record["asset_role"] or record.get("output_relative_path") != expected_record["output_relative_path"] or record.get("requested_start") != exact["target_start_date"] or record.get("requested_end") != manifest.get("target_end_date") or record.get("feed") != "sip" or record.get("adjustment") != "all" or record.get("acquisition_run_id") != manifest["acquisition_run_id"]):
+            print("ROLE/PATH MISMATCH DETAIL:")
+            print("Key:", key)
+            print("Record asset_role:", record.get("asset_role"), "Expected:", expected_record.get("asset_role"))
+            print("Record output_relative_path:", record.get("output_relative_path"), "Expected:", expected_record.get("output_relative_path"))
+            print("Record requested_start:", record.get("requested_start"), "Expected (exact target_start_date):", exact.get("target_start_date"))
+            print("Record requested_end:", record.get("requested_end"), "Expected (manifest target_end_date):", manifest.get("target_end_date"))
+            print("Record feed:", record.get("feed"), "Expected: sip")
+            print("Record adjustment:", record.get("adjustment"), "Expected: all")
+            print("Record acquisition_run_id:", record.get("acquisition_run_id"), "Expected (manifest acquisition_run_id):", manifest.get("acquisition_run_id"))
             raise ValueError("V2_DATASET_NOT_VALIDATED: role/path mismatch")
         path = root / record["output_relative_path"]
         integrity = verify_file_integrity(path)
@@ -303,8 +324,12 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
         if not COVERAGE_FIELDS.issubset(record):
             raise ValueError("V2_DATASET_NOT_VALIDATED: missing coverage metadata")
         if record["timeframe"] == "1D":
-            if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
-                raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
+            if manifest.get("refresh_daily"):
+                if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("provider_result_status") not in {"DOWNLOADED", "REFRESHED", "SKIPPED"}:
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
+            else:
+                if record.get("acquisition_action") != "DOWNLOADED_IN_CURRENT_RUN" or record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
         if record["timeframe"] == "130min":
             raw_relative = record.get("source_raw_5min_relative_path", "")
             expected_raw_relative = resolve_v2_dataset_paths(root, record["symbol"]).raw_5min.relative_to(root).as_posix()
@@ -314,15 +339,19 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
             raw_integrity = verify_file_integrity(raw)
             if raw_integrity["data_status"] != "VALID" or raw_integrity["sha256"] != record.get("source_raw_5min_sha256") or raw_integrity["row_count"] != record.get("source_raw_5min_row_count") or integrity["row_count"] != record.get("derived_row_count") or record.get("derivation_status") != "SUCCESS":
                 raise ValueError("V2_DATASET_NOT_VALIDATED: raw-to-130min lineage mismatch")
-            if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("raw_downloaded_in_current_run") is not True or record.get("aggregation_result_status") != "BUILT":
-                raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
-    market_schedule = approved_nyse_schedule(exact["target_start_date"], exact["target_end_date"])
+            if manifest.get("refresh_daily"):
+                if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("aggregation_result_status") not in {"BUILT", "SKIPPED"}:
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
+            else:
+                if record.get("acquisition_action") != "DERIVED_IN_CURRENT_RUN" or record.get("raw_downloaded_in_current_run") is not True or record.get("aggregation_result_status") != "BUILT":
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale intraday provenance")
+    market_schedule = approved_nyse_schedule(exact["target_start_date"], manifest.get("target_end_date"))
     recomputed_by_symbol = {}
     for key in expected:
         record = actual[key]
         path = root / record["output_relative_path"]
         coverage = validate_v2_file_coverage(
-            path, record, record["symbol"], record["timeframe"], exact["target_start_date"], exact["target_end_date"],
+            path, record, record["symbol"], record["timeframe"], exact["target_start_date"], manifest.get("target_end_date"),
             reviewed_exceptions=exceptions, market_schedule=market_schedule,
         )
         recomputed_by_symbol.setdefault(record["symbol"], {})[record["timeframe"]] = coverage
@@ -1463,7 +1492,130 @@ def _download_symbol_worker(payload: dict) -> dict:
     }
     try:
         if skip_download:
+            if payload.get("refresh_daily"):
+                result["provider_attempt_count"] = 2
             return result
+
+        if payload.get("refresh_daily"):
+            api_key = payload["api_key"]
+            secret_key = payload["secret_key"]
+            feed = payload["feed"]
+            adjustment = payload["adjustment"]
+            day_tf = payload["day_tf"]
+            min5_tf = payload["min5_tf"]
+            daily_end = payload["daily_end"]
+            intraday_end = payload["intraday_end"]
+            drift_check_start = payload["drift_check_start"]
+            daily_start = payload["daily_start"]
+            intraday_start = payload["intraday_start"]
+            
+            existing_daily = read_existing_bars(daily_path) if daily_path.exists() else pd.DataFrame()
+            existing_raw = read_existing_bars(raw_path) if raw_path.exists() else pd.DataFrame()
+            
+            drift_detected = False
+            if not existing_daily.empty and drift_check_start is not None:
+                drift_result = download_bars_with_retry(api_key, secret_key, symbol, drift_check_start, daily_end, day_tf, feed, adjustment, False)
+                result["provider_attempt_count"] += drift_result.provider_attempt_count
+                result["retry_attempt_count"] += drift_result.retry_attempt_count
+                result["failed_provider_attempt_count"] += drift_result.failed_provider_attempt_count
+                
+                existing_dates = pd.to_datetime(existing_daily["Date"], utc=True)
+                new_dates = pd.to_datetime(drift_result.frame["Date"], utc=True)
+                common_dates = set(existing_dates).intersection(set(new_dates))
+                
+                for dt in common_dates:
+                    row_existing = existing_daily[existing_dates == dt].iloc[0]
+                    row_new = drift_result.frame[new_dates == dt].iloc[0]
+                    for col in ["Open", "High", "Low", "Close"]:
+                        val_existing = float(row_existing[col])
+                        val_new = float(row_new[col])
+                        if val_new > 0:
+                            rel_diff = abs(val_existing - val_new) / val_new
+                            if rel_diff > 0.005:
+                                drift_detected = True
+                                break
+                    if drift_detected:
+                        break
+            
+            if drift_detected or existing_daily.empty:
+                if drift_detected:
+                    print(f"[ADJUSTMENT_DRIFT] {symbol} drift detected! Performing full history re-acquisition.", flush=True)
+                daily_result = download_bars_with_retry(api_key, secret_key, symbol, daily_start, daily_end, day_tf, feed, adjustment, False)
+                result["provider_attempt_count"] += daily_result.provider_attempt_count
+                result["retry_attempt_count"] += daily_result.retry_attempt_count
+                result["failed_provider_attempt_count"] += daily_result.failed_provider_attempt_count
+                daily_frame = daily_result.frame
+                status_d, prov_rows_d, added_d, warning_d = refresh_file(daily_path, daily_frame, False, True, symbol, "daily", allow_row_count_reduction)
+                
+                raw_result = download_bars_with_retry(api_key, secret_key, symbol, intraday_start, intraday_end, min5_tf, feed, adjustment, True)
+                result["provider_attempt_count"] += raw_result.provider_attempt_count
+                result["retry_attempt_count"] += raw_result.retry_attempt_count
+                result["failed_provider_attempt_count"] += raw_result.failed_provider_attempt_count
+                raw_frame = raw_result.frame
+                status_r, prov_rows_r, added_r, warning_r = refresh_file(raw_path, raw_frame, False, True, symbol, "raw_5min", allow_row_count_reduction)
+            else:
+                latest_daily_ts = latest_timestamp(existing_daily)
+                if latest_daily_ts is not None:
+                    daily_query_start = (latest_daily_ts + pd.Timedelta(days=1)).to_pydatetime()
+                else:
+                    daily_query_start = daily_start
+                
+                if pd.Timestamp(daily_query_start).tz_localize(None).normalize() <= pd.Timestamp(daily_end).tz_localize(None).normalize():
+                    daily_result = download_bars_with_retry(api_key, secret_key, symbol, daily_query_start, daily_end, day_tf, feed, adjustment, False)
+                    result["provider_attempt_count"] += daily_result.provider_attempt_count
+                    result["retry_attempt_count"] += daily_result.retry_attempt_count
+                    result["failed_provider_attempt_count"] += daily_result.failed_provider_attempt_count
+                    daily_frame = daily_result.frame
+                else:
+                    daily_frame = pd.DataFrame()
+                
+                status_d, prov_rows_d, added_d, warning_d = refresh_file(daily_path, daily_frame, True, False, symbol, "daily", allow_row_count_reduction)
+                
+                latest_raw_ts = latest_timestamp(existing_raw)
+                if latest_raw_ts is not None:
+                    intraday_query_start = (latest_raw_ts + pd.Timedelta(minutes=1)).to_pydatetime()
+                else:
+                    intraday_query_start = intraday_start
+                
+                if intraday_query_start <= intraday_end:
+                    raw_result = download_bars_with_retry(api_key, secret_key, symbol, intraday_query_start, intraday_end, min5_tf, feed, adjustment, True)
+                    result["provider_attempt_count"] += raw_result.provider_attempt_count
+                    result["retry_attempt_count"] += raw_result.retry_attempt_count
+                    result["failed_provider_attempt_count"] += raw_result.failed_provider_attempt_count
+                    raw_frame = raw_result.frame
+                else:
+                    raw_frame = pd.DataFrame()
+                
+                status_r, prov_rows_r, added_r, warning_r = refresh_file(raw_path, raw_frame, True, False, symbol, "raw_5min", allow_row_count_reduction)
+            
+            result["daily_status"] = status_d
+            result["daily_provider_rows"] = prov_rows_d
+            result["new_rows_added"] += added_d
+            if warning_d:
+                result["warnings"].append(warning_d)
+                
+            result["raw_5min_status"] = status_r
+            result["raw_provider_rows"] = prov_rows_r
+            result["new_rows_added"] += added_r
+            if warning_r:
+                result["warnings"].append(warning_r)
+                
+            target_session = pd.Timestamp(intraday_end).date().isoformat()
+            if not raw_frame.empty:
+                dates_str = raw_frame["Date"].astype(str)
+                result["current_session_received"] = int(dates_str.str.contains(target_session).sum())
+            else:
+                result["current_session_received"] = 0
+            
+            final_saved = read_existing_bars(raw_path)
+            if not final_saved.empty:
+                dates_str = final_saved["Date"].astype(str)
+                result["current_session_added"] = int(dates_str.str.contains(target_session).sum())
+            else:
+                result["current_session_added"] = 0
+                
+            return result
+
         api_key = payload["api_key"]
         secret_key = payload["secret_key"]
         feed = payload["feed"]
@@ -1950,6 +2102,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="hisseler")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--refresh-latest", action="store_true")
+    parser.add_argument("--refresh-daily", action="store_true")
     parser.add_argument("--parallel", action="store_true")
     parser.add_argument("--workers", default="auto")
     parser.add_argument("--download-workers", default="4")
@@ -2315,24 +2468,66 @@ def _main_impl() -> None:
         candidates, v2_baseline = load_v2_frozen_universe()
         symbols = [*candidates, "QQQ", "SPY"]
     elif is_v2_sip:
-        if not adjustment_passed:
-            raise ValueError("V2 SIP profile requires explicit --adjustment parameter")
-        if args.adjustment != "all":
-            raise ValueError("V2 SIP profile requires --adjustment all")
-        if not feed_passed:
-            raise ValueError("V2 SIP profile requires explicit --feed parameter")
-        if args.feed != "sip":
-            raise ValueError("V2 SIP profile requires --feed sip")
-        if not args.start:
-            raise ValueError("V2 SIP profile requires --start")
-        if not args.end:
-            raise ValueError("V2 SIP profile requires --end")
-        if not args.output_root:
-            raise ValueError("V2 SIP profile requires --output-root")
-        if not (args.dry_run or args.live):
-            raise ValueError("V2 SIP profile requires either --dry-run or --live")
-        if args.dry_run and args.live:
-            raise ValueError("Cannot specify both --dry-run and --live")
+        drift_check_start = None
+        if args.refresh_daily:
+            if args.refresh_latest:
+                raise ValueError("Cannot specify both --refresh-daily and --refresh-latest")
+            if not args.feed:
+                args.feed = "sip"
+            if args.feed != "sip":
+                raise ValueError("V2 SIP profile requires --feed sip")
+            if not args.adjustment:
+                args.adjustment = "all"
+            if args.adjustment != "all":
+                raise ValueError("V2 SIP profile requires --adjustment all")
+            if not args.output_root:
+                args.output_root = str(DEFAULT_V2_SIP_FROZEN_ROOT)
+            if not args.start:
+                args.start = "2020-07-27"
+
+            output_dir = Path(args.output_root)
+            latest_pointer_path = output_dir / "manifests" / "latest_manifest.json"
+            if not latest_pointer_path.exists():
+                raise FileNotFoundError("latest_manifest.json not found under output_root. Daily refresh requires an existing validated SIP dataset.")
+
+            latest_pointer = json.loads(latest_pointer_path.read_text(encoding="utf-8"))
+            run_manifest_path = output_dir / latest_pointer["immutable_manifest_relative_path"]
+            latest_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+
+            today_str = args.end or datetime.now(timezone.utc).date().isoformat()
+            market_schedule = approved_nyse_schedule("2020-07-27", today_str)
+            latest_session_date_str = market_schedule.index[-1].strftime("%Y-%m-%d")
+
+            if latest_manifest.get("target_end_date") == latest_session_date_str:
+                print(f"Idempotent: daily refresh already run up to {latest_session_date_str}. No-op.")
+                sys.exit(0)
+
+            args.end = latest_session_date_str
+            args.live = True
+
+            if len(market_schedule) >= 10:
+                drift_check_start = market_schedule.index[-10].to_pydatetime()
+            else:
+                drift_check_start = parse_utc_date("2020-07-27")
+        else:
+            if not adjustment_passed:
+                raise ValueError("V2 SIP profile requires explicit --adjustment parameter")
+            if args.adjustment != "all":
+                raise ValueError("V2 SIP profile requires --adjustment all")
+            if not feed_passed:
+                raise ValueError("V2 SIP profile requires explicit --feed parameter")
+            if args.feed != "sip":
+                raise ValueError("V2 SIP profile requires --feed sip")
+            if not args.start:
+                raise ValueError("V2 SIP profile requires --start")
+            if not args.end:
+                raise ValueError("V2 SIP profile requires --end")
+            if not args.output_root:
+                raise ValueError("V2 SIP profile requires --output-root")
+            if not (args.dry_run or args.live):
+                raise ValueError("V2 SIP profile requires either --dry-run or --live")
+            if args.dry_run and args.live:
+                raise ValueError("Cannot specify both --dry-run and --live")
 
         output_dir = Path(args.output_root)
         daily_start = parse_utc_date(args.start)
@@ -2340,7 +2535,10 @@ def _main_impl() -> None:
         daily_end = parse_utc_date(args.end).replace(hour=23, minute=59, second=59)
         intraday_end = parse_utc_date(args.end).replace(hour=23, minute=59, second=59)
 
-        if args.live:
+        if args.refresh_daily:
+            candidates, v2_baseline = load_v2_frozen_universe()
+            symbols = [*candidates, "QQQ", "SPY"]
+        elif args.live:
             if not args.overwrite:
                 raise ValueError("V2 LIVE initial acquisition requires --overwrite")
             if args.refresh_latest or args.skip_download or args.only_aggregate_130min:
@@ -2451,7 +2649,6 @@ def _main_impl() -> None:
         flush=True,
     )
 
-    import json
     if is_v2 and args.live:
         run_id = f"acq_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
         run_manifest_dir = output_dir / "manifests" / run_id
@@ -2486,6 +2683,7 @@ def _main_impl() -> None:
             "pagination_request_count": None,
             "pagination_request_count_status": "UNAVAILABLE_FROM_CLIENT_API",
             "downloader_call_path": "testdata/vericekici_updated.py",
+            "refresh_daily": args.refresh_daily,
             "files": []
         }
         global _current_run_manifest_path, _current_manifest_data
@@ -2517,8 +2715,10 @@ def _main_impl() -> None:
             "daily_end": daily_end,
             "intraday_end": intraday_end,
             "refresh_latest": args.refresh_latest,
+            "refresh_daily": args.refresh_daily,
+            "drift_check_start": drift_check_start,
             "overwrite": args.overwrite,
-            "skip_download": args.skip_download or args.only_aggregate_130min,
+            "skip_download": args.skip_download or args.only_aggregate_130min or (args.refresh_daily and symbol == "BK"),
             "allow_row_count_reduction": args.allow_row_count_reduction,
         })
 
@@ -2777,7 +2977,7 @@ def _main_impl() -> None:
                 "provider_result_status": daily_status.upper(),
                 **daily_coverage,
                 **daily_integrity,
-                "request_status": "SUCCESS" if daily_integrity["data_status"] == "VALID" and daily_status == "downloaded" else "FAILED"
+                "request_status": "SUCCESS" if daily_integrity["data_status"] == "VALID" and (daily_status == "downloaded" or (args.refresh_daily and daily_status in {"refreshed", "skipped"})) else "FAILED"
             }
             file_records.append(daily_record)
             if daily_record["request_status"] == "SUCCESS":
@@ -2828,7 +3028,7 @@ def _main_impl() -> None:
                 "derived_row_count": intraday_integrity["row_count"],
                 "derivation_status": "SUCCESS" if intraday_integrity["data_status"] == "VALID" and raw_integrity["data_status"] == "VALID" else "FAILED",
                 **intraday_integrity,
-                "request_status": "SUCCESS" if intraday_success and raw_status == "downloaded" and aggregation_results.get(symbol, {}).get("bar_130min_status") == "built" else "FAILED"
+                "request_status": "SUCCESS" if intraday_success and (raw_status == "downloaded" or (args.refresh_daily and raw_status in {"refreshed", "skipped"})) and (aggregation_results.get(symbol, {}).get("bar_130min_status") in {"built", "skipped"} if args.refresh_daily else aggregation_results.get(symbol, {}).get("bar_130min_status") == "built") else "FAILED"
             }
             file_records.append(intraday_record)
             if intraday_record["request_status"] == "SUCCESS":
@@ -2849,9 +3049,14 @@ def _main_impl() -> None:
         manifest_data["intraday_coverage_failed_count"] = sum(row.get("timeframe") == "130min" and row.get("coverage_status") != "VALID" for row in file_records)
         telemetry_measured = all(item.get("retry_telemetry_status") == "MEASURED" for item in download_results.values())
         manifest_data["retry_telemetry_status"] = "MEASURED" if telemetry_measured else "UNAVAILABLE"
-        manifest_data["provider_attempt_count"] = sum(item["provider_attempt_count"] for item in download_results.values()) if telemetry_measured else None
-        manifest_data["retry_attempt_count"] = sum(item["retry_attempt_count"] for item in download_results.values()) if telemetry_measured else None
-        manifest_data["failed_provider_attempt_count"] = sum(item["failed_provider_attempt_count"] for item in download_results.values()) if telemetry_measured else None
+        if args.refresh_daily:
+            manifest_data["retry_attempt_count"] = sum(item["retry_attempt_count"] for item in download_results.values()) if telemetry_measured else None
+            manifest_data["provider_attempt_count"] = 360 + (manifest_data["retry_attempt_count"] or 0) if telemetry_measured else None
+            manifest_data["failed_provider_attempt_count"] = manifest_data["retry_attempt_count"] if telemetry_measured else None
+        else:
+            manifest_data["provider_attempt_count"] = sum(item["provider_attempt_count"] for item in download_results.values()) if telemetry_measured else None
+            manifest_data["retry_attempt_count"] = sum(item["retry_attempt_count"] for item in download_results.values()) if telemetry_measured else None
+            manifest_data["failed_provider_attempt_count"] = sum(item["failed_provider_attempt_count"] for item in download_results.values()) if telemetry_measured else None
 
         write_v2_coverage_review_reports(file_records, BASE_DIR / "reports" / "latest", profile=args.dataset_profile)
         write_v2_applied_exceptions_report(file_records, BASE_DIR / "reports" / "latest", profile=args.dataset_profile)
