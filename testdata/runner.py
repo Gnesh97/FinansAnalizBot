@@ -1722,7 +1722,11 @@ def _load_or_build_prepared_cache(
     rows_loaded = int(sum(len(frame) for frame in asset_data.values()))
     prepared = {
         "asset_data": asset_data,
-        "benchmark_data": asset_data["QQQ"] if "QQQ" in asset_data else asset_data.get("SPY"),
+        "benchmark_data": (
+            asset_data["QQQ"] if "QQQ" in asset_data
+            else asset_data["SPY"] if "SPY" in asset_data
+            else _load_daily_benchmark(daily_dir, start_date, end_date)
+        ),
         "cache_summary": {
             "prepared_disk_cache_hits": 0,
             "prepared_disk_cache_misses": 1,
@@ -2012,7 +2016,17 @@ def _report_row(experiment_name, params, metrics):
 def _init_experiment_worker(cache_path):
     global _WORKER_PREPARED
     payload = pd.read_pickle(cache_path)
-    _WORKER_PREPARED = payload["prepared"]
+    prepared = payload["prepared"]
+    if prepared.get("benchmark_data") is None:
+        summary = prepared.get("cache_summary", {})
+        daily_dir = summary.get("daily_data_dir")
+        if daily_dir:
+            prepared["benchmark_data"] = _load_daily_benchmark(
+                daily_dir,
+                summary.get("start_date"),
+                summary.get("end_date")
+            )
+    _WORKER_PREPARED = prepared
 
 
 def _run_experiment_worker(task):
@@ -7599,8 +7613,10 @@ def validate_v2_clean_dataset(data_folder):
             raise ValueError(f"V2_DATASET_NOT_VALIDATED: shared manifest validator failed: {e}")
         if manifest.get("strategy_identifier") != "rs_m126_top30_sma100_no_regime_v2_clean_stock":
             raise ValueError("V2_DATASET_NOT_VALIDATED: strategy identifier mismatch")
-        if manifest.get("target_start_date") != "2020-07-27" or manifest.get("target_end_date") != "2026-07-07":
-            raise ValueError("V2_DATASET_NOT_VALIDATED: target period mismatch")
+        if manifest.get("target_start_date") != "2020-07-27":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: target start date mismatch")
+        if manifest.get("target_end_date", "") < "2026-07-07":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: target end date too old")
         if manifest.get("adjustment") != "all":
             raise ValueError("V2_DATASET_NOT_VALIDATED: adjustment is not all")
         if manifest.get("feed") != "sip":
