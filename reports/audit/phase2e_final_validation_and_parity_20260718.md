@@ -120,8 +120,9 @@ Reviewer separately confirmed clean: the exception-matching call sites only ever
 | `9f451ee` | feat: add final SIP exception records and freeze validated baseline |
 | `cbe8524` | test: add PARTIAL_BOUNDARY_SESSION regression tests |
 | `9d44a8d` | fix: stop assuming a pristine sandbox in 2 offline-audit tests |
+| `0e54052` | docs: add Phase 2E final validation and parity report |
 
-All 4 on branch `checkpoint/research-framework-2026-07`, not pushed. Tree clean except the pre-existing untracked `.venv_linux/` and this report itself (committed separately below).
+All 5 on branch `checkpoint/research-framework-2026-07`, not pushed. Tree clean except the pre-existing untracked `.venv_linux/`.
 
 ### Recommendation: **GO-WITH-CONDITIONS**
 
