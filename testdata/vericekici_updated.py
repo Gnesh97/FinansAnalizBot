@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 try:
     from .v2_session_coverage import (
         COVERAGE_FIELDS,
+        _matching_exception,
         approved_nyse_schedule,
         coverage_metadata_for_file,
         load_reviewed_coverage_exceptions,
@@ -27,6 +28,7 @@ try:
 except ImportError:
     from v2_session_coverage import (
         COVERAGE_FIELDS,
+        _matching_exception,
         approved_nyse_schedule,
         coverage_metadata_for_file,
         load_reviewed_coverage_exceptions,
@@ -200,6 +202,20 @@ def load_v2_frozen_universe(path: Path = V2_BASELINE_PATH) -> tuple[list[str], d
     if not valid:
         raise ValueError(V2_UNIVERSE_CONTRACT_MISMATCH)
     return symbols, baseline
+
+
+def _refresh_daily_terminated_symbols(symbols: list[str], exceptions: list[dict], as_of_date: str) -> set[str]:
+    """Symbols whose acquisition should be skipped during --refresh-daily because a
+    reviewed EARLY_TERMINAL exception (registry) shows no data can exist for them on
+    or after as_of_date. Registry-driven: no symbol literals here -- the exception
+    file is the only source of which symbols this applies to.
+    """
+    terminated = set()
+    for symbol in symbols:
+        terminal_exception = _matching_exception(exceptions, symbol, "EARLY_TERMINAL")
+        if terminal_exception is not None and str(terminal_exception.get("approved_last_session", "")) <= as_of_date:
+            terminated.add(symbol)
+    return terminated
 
 
 def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_baseline: dict | None = None) -> None:
@@ -2680,6 +2696,11 @@ def _main_impl() -> None:
         _current_manifest_data = manifest_data
         _atomic_write_json(manifest_data, run_manifest_path)
 
+    refresh_daily_terminated_symbols = set()
+    if args.refresh_daily:
+        refresh_daily_exceptions = load_reviewed_coverage_exceptions(V2_SIP_COVERAGE_EXCEPTIONS_PATH)
+        refresh_daily_terminated_symbols = _refresh_daily_terminated_symbols(symbols, refresh_daily_exceptions, args.end)
+
     download_payloads = []
     for symbol in symbols:
         if is_v2:
@@ -2707,7 +2728,7 @@ def _main_impl() -> None:
             "refresh_daily": args.refresh_daily,
             "drift_check_start": drift_check_start,
             "overwrite": args.overwrite,
-            "skip_download": args.skip_download or args.only_aggregate_130min or (args.refresh_daily and symbol == "BK"),
+            "skip_download": args.skip_download or args.only_aggregate_130min or (symbol in refresh_daily_terminated_symbols),
             "allow_row_count_reduction": args.allow_row_count_reduction,
         })
 

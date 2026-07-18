@@ -15,8 +15,10 @@ from testdata.vericekici_updated import (  # noqa: E402
     V2_SIP_COVERAGE_EXCEPTIONS_PATH,
     DownloadBarsResult,
     _download_symbol_worker,
+    _refresh_daily_terminated_symbols,
     main,
 )
+from testdata.v2_session_coverage import coverage_exception_evidence_hash  # noqa: E402
 
 
 SIP_BASE = [
@@ -481,6 +483,60 @@ class TestRefreshDailyGuardEnforcement(unittest.TestCase):
     def test_refresh_daily_forbids_refresh_latest(self):
         argv = ["vericekici_updated.py", "--dataset-profile", "rs_v2_sip", "--refresh-daily", "--refresh-latest"]
         self._run(argv, "Cannot specify both --refresh-daily and --refresh-latest")
+
+
+class TestRefreshDailyTerminatedSymbolsRegistryDriven(unittest.TestCase):
+    # Regression coverage for the exception-registry fix: --refresh-daily used to
+    # hardcode `symbol == "BK"` to decide which symbol to skip. That is replaced with
+    # a lookup against the reviewed EARLY_TERMINAL exception registry. These tests
+    # prove the skip decision is driven entirely by the registry content, not by any
+    # ticker literal in the acquisition code.
+    def _early_terminal_exception(self, symbol, approved_last_session):
+        row = {
+            "symbol": symbol,
+            "exception_type": "EARLY_TERMINAL",
+            "approved_last_session": approved_last_session,
+            "reason": "synthetic test exception",
+            "evidence_source": "synthetic test evidence",
+            "evidence_date": approved_last_session,
+            "reviewed": True,
+            "approved_by": "test",
+            "approved_at": approved_last_session,
+        }
+        row["evidence_hash"] = coverage_exception_evidence_hash(row)
+        return row
+
+    def test_symbol_with_approved_exception_is_skipped(self):
+        exceptions = [self._early_terminal_exception("BK", "2026-05-20")]
+        result = _refresh_daily_terminated_symbols(["BK", "AAPL"], exceptions, "2026-07-17")
+        self.assertEqual(result, {"BK"})
+
+    def test_symbol_without_exception_is_not_skipped(self):
+        exceptions = [self._early_terminal_exception("BK", "2026-05-20")]
+        result = _refresh_daily_terminated_symbols(["AAPL", "MSFT"], exceptions, "2026-07-17")
+        self.assertEqual(result, set())
+
+    def test_altering_the_exception_record_changes_the_behavior(self):
+        # Same symbol, same call shape -- only the registry content differs.
+        exceptions_with_bk = [self._early_terminal_exception("BK", "2026-05-20")]
+        exceptions_without_bk = []
+        result_with = _refresh_daily_terminated_symbols(["BK"], exceptions_with_bk, "2026-07-17")
+        result_without = _refresh_daily_terminated_symbols(["BK"], exceptions_without_bk, "2026-07-17")
+        self.assertEqual(result_with, {"BK"})
+        self.assertEqual(result_without, set())
+
+    def test_unreviewed_or_tampered_exception_is_not_honored(self):
+        row = self._early_terminal_exception("BK", "2026-05-20")
+        row["evidence_hash"] = "tampered_hash_value"
+        result = _refresh_daily_terminated_symbols(["BK"], [row], "2026-07-17")
+        self.assertEqual(result, set())
+
+    def test_terminal_date_after_refresh_window_is_not_skipped(self):
+        # approved_last_session in the future relative to as_of_date means the
+        # symbol was still trading through the refresh window -- must not skip.
+        exceptions = [self._early_terminal_exception("BK", "2026-08-01")]
+        result = _refresh_daily_terminated_symbols(["BK"], exceptions, "2026-07-17")
+        self.assertEqual(result, set())
 
 
 if __name__ == "__main__":
