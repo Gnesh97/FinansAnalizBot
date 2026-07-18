@@ -46,7 +46,10 @@ Legacy dosya varsa production'a import edilmemeli:
 
 ## 4. Data Status
 
-Veri klasoru:
+Active Veri Klasoru:
+`testdata/research_data/rs_v2_sip_market_data/`
+
+Legacy (Frozen/Read-Only) Veri Klasoru:
 `testdata/hisseler/`
 
 Yapi:
@@ -54,7 +57,7 @@ Yapi:
 * `daily/`
 * `raw_5min/`
 * `bars_130min/`
-* `manifest/`
+* `manifests/`
 * `.cache/prepared_features/`
 
 Backtest:
@@ -188,8 +191,9 @@ Allowed decisions:
 
 ## 9. Daily Pipeline
 
-Main daily script:
-`scripts/run_daily_paper_pipeline.bat`
+Main daily scripts:
+* `scripts/run_daily_paper_pipeline.bat` (Windows)
+* `scripts/run_daily_paper_pipeline.sh` (Linux)
 
 This script:
 
