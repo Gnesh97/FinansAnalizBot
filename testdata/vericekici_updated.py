@@ -414,6 +414,9 @@ def write_v2_applied_exceptions_report(file_records: list[dict], latest_dir: Pat
         if "APPROVED_MISSING_INTERNAL_SESSION" in reason_tokens:
             for affected_date in record.get("approved_internal_session_exception_dates", []):
                 rows.append({"symbol": symbol, "timeframe": timeframe, "exception_type": "MISSING_INTERNAL_SESSION", "affected_date": affected_date, "reason": reason})
+        if "APPROVED_PARTIAL_BOUNDARY_SESSION" in reason_tokens:
+            for affected_date in record.get("approved_partial_boundary_session_dates", []):
+                rows.append({"symbol": symbol, "timeframe": timeframe, "exception_type": "PARTIAL_BOUNDARY_SESSION", "affected_date": affected_date, "reason": reason})
     latest_dir = Path(latest_dir)
     latest_dir.mkdir(parents=True, exist_ok=True)
     if profile == "rs_v2_sip":

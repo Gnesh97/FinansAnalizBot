@@ -52,10 +52,25 @@ INTERNAL_SESSION_EXCEPTION_FIELDS = {
     "approved_by",
     "approved_at",
 }
-EXCEPTION_SCHEMA_VERSIONS = {"1.0.0", "2.0.0"}
+PARTIAL_BOUNDARY_SESSION_FIELDS = {
+    "symbol",
+    "exception_type",
+    "reason",
+    "evidence_source",
+    "evidence_date",
+    "reviewed",
+    "evidence_hash",
+    "affected_date",
+    "timeframes_affected",
+    "boundary_trade_timestamp",
+    "approved_by",
+    "approved_at",
+}
+EXCEPTION_SCHEMA_VERSIONS = {"1.0.0", "2.0.0", "3.0.0"}
 EXCEPTION_TYPES_BY_SCHEMA_VERSION = {
     "1.0.0": {"LATE_START", "EARLY_TERMINAL"},
     "2.0.0": {"LATE_START", "EARLY_TERMINAL", "MISSING_INTERNAL_SESSION"},
+    "3.0.0": {"LATE_START", "EARLY_TERMINAL", "MISSING_INTERNAL_SESSION", "PARTIAL_BOUNDARY_SESSION"},
 }
 
 
@@ -72,6 +87,8 @@ def _required_exception_fields(exception_type: str) -> set[str] | None:
         return EXCEPTION_FIELDS | {"approved_last_session"}
     if exception_type == "MISSING_INTERNAL_SESSION":
         return INTERNAL_SESSION_EXCEPTION_FIELDS
+    if exception_type == "PARTIAL_BOUNDARY_SESSION":
+        return PARTIAL_BOUNDARY_SESSION_FIELDS
     return None
 
 
@@ -103,6 +120,16 @@ def load_reviewed_coverage_exceptions(path: Path) -> list[dict]:
                 tuple(sorted(row.get("timeframes_affected", []))),
             )
             if not row.get("affected_date") or key in seen:
+                raise ValueError("V2_COVERAGE_EXCEPTION_FILE_INVALID")
+        elif exception_type == "PARTIAL_BOUNDARY_SESSION":
+            if (
+                not row.get("affected_date")
+                or not row.get("boundary_trade_timestamp")
+                or set(row.get("timeframes_affected", [])) != {"130min"}
+            ):
+                raise ValueError("V2_COVERAGE_EXCEPTION_FILE_INVALID")
+            key = (str(row.get("symbol", "")).upper(), exception_type, str(row.get("affected_date", "")))
+            if not key[0] or key in seen:
                 raise ValueError("V2_COVERAGE_EXCEPTION_FILE_INVALID")
         else:
             key = (str(row.get("symbol", "")).upper(), exception_type)
@@ -160,6 +187,27 @@ def _matching_exception(exceptions: Iterable[dict], symbol: str, kind: str) -> d
     ):
         return None
     return row
+
+
+def _matching_partial_boundary_session_exception(exceptions: Iterable[dict], symbol: str, boundary_date: str) -> dict | None:
+    """A PARTIAL_BOUNDARY_SESSION exception only ever matches the symbol's own,
+    independently-computed first or last retained session -- never an arbitrary
+    date -- because the caller always passes the actual first_text/last_text
+    derived from real data, not a value taken from the exception record itself.
+    """
+    if not boundary_date:
+        return None
+    for row in exceptions:
+        if row.get("exception_type") != "PARTIAL_BOUNDARY_SESSION":
+            continue
+        if str(row.get("symbol", "")).upper() != symbol.upper():
+            continue
+        if str(row.get("affected_date", "")) != boundary_date:
+            continue
+        if row.get("reviewed") is not True or row.get("evidence_hash") != coverage_exception_evidence_hash(row):
+            continue
+        return row
+    return None
 
 
 def _approved_internal_session_exception_dates(exceptions: Iterable[dict], symbol: str, timeframe: str) -> set[pd.Timestamp]:
@@ -265,21 +313,43 @@ def calculate_v2_session_coverage(
     expected_intraday_set = set(expected_intraday)
     actual_timestamp_set = set(valid_timestamps)
     approved_missing_intraday: set[pd.Timestamp] = set()
+    approved_partial_boundary: set[pd.Timestamp] = set()
+    partial_boundary_first = _matching_partial_boundary_session_exception(reviewed_exceptions, symbol, first_text) if first_text else None
+    partial_boundary_last = _matching_partial_boundary_session_exception(reviewed_exceptions, symbol, last_text) if last_text else None
     if timeframe == "130min":
         missing_intraday_timestamps = expected_intraday_set - actual_timestamp_set
         approved_missing_intraday = {
             stamp for stamp in missing_intraday_timestamps
             if stamp.tz_convert(MARKET_TIMEZONE).normalize().tz_localize(None) in approved_internal_dates
         }
-        missing_intraday = len(missing_intraday_timestamps - approved_missing_intraday)
+        remaining_missing = missing_intraday_timestamps - approved_missing_intraday
+        for stamp in remaining_missing:
+            stamp_date = str(stamp.tz_convert(MARKET_TIMEZONE).date())
+            if partial_boundary_first is not None and stamp_date == first_text:
+                # Only forgive bars that would fall BEFORE the real first trade --
+                # never an unrelated gap elsewhere on the same calendar day.
+                boundary_ts = pd.Timestamp(partial_boundary_first["boundary_trade_timestamp"]).tz_convert("UTC")
+                if stamp < boundary_ts:
+                    approved_partial_boundary.add(stamp)
+            elif partial_boundary_last is not None and stamp_date == last_text:
+                # Symmetric case: only forgive bars AFTER the real last trade.
+                boundary_ts = pd.Timestamp(partial_boundary_last["boundary_trade_timestamp"]).tz_convert("UTC")
+                if stamp > boundary_ts:
+                    approved_partial_boundary.add(stamp)
+        missing_intraday = len(remaining_missing - approved_partial_boundary)
     else:
         missing_intraday = 0
     invalid_intraday = len([stamp for stamp in valid_timestamps if stamp not in expected_intraday_set]) if timeframe == "130min" else 0
     approved_internal_session_exception_dates = sorted({str(session.date()) for session in approved_missing} | {
         str(stamp.tz_convert(MARKET_TIMEZONE).date()) for stamp in approved_missing_intraday
     })
+    approved_partial_boundary_session_dates = sorted({
+        str(stamp.tz_convert(MARKET_TIMEZONE).date()) for stamp in approved_partial_boundary
+    })
     if approved_internal_session_exception_dates:
         reasons.append("APPROVED_MISSING_INTERNAL_SESSION")
+    if approved_partial_boundary_session_dates:
+        reasons.append("APPROVED_PARTIAL_BOUNDARY_SESSION")
     if duplicate_daily:
         reasons.append("DUPLICATE_DAILY_SESSION")
     if duplicate_intraday:
@@ -314,6 +384,7 @@ def calculate_v2_session_coverage(
         # never participates in the strict manifest-vs-recomputed equality gate;
         # approved exceptions must be visible in reports, never silently absorbed.
         "approved_internal_session_exception_dates": approved_internal_session_exception_dates,
+        "approved_partial_boundary_session_dates": approved_partial_boundary_session_dates,
     }
 
 
