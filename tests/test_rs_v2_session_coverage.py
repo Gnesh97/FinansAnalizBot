@@ -395,5 +395,116 @@ class TestV2SessionCoverage(unittest.TestCase):
             self.assertEqual(pd.read_csv(csv_path).iloc[0]["exception_type"], "LATE_START")
 
 
+def _partial_boundary_exception(symbol: str, affected_date: str, boundary_trade_timestamp: str | None = None) -> dict:
+    item = {
+        "symbol": symbol,
+        "exception_type": "PARTIAL_BOUNDARY_SESSION",
+        "reason": "Direct listing; trading began mid-session on the listing day.",
+        "evidence_source": "reviewed_fixture_registry",
+        "evidence_date": affected_date,
+        "reviewed": True,
+        "affected_date": affected_date,
+        "timeframes_affected": ["130min"],
+        "boundary_trade_timestamp": boundary_trade_timestamp or f"{affected_date}T13:35:00-05:00",
+        "approved_by": "operator",
+        "approved_at": "2026-07-18",
+    }
+    item["evidence_hash"] = coverage_exception_evidence_hash(item)
+    return item
+
+
+class TestPartialBoundarySessionException(unittest.TestCase):
+    def test_schema_accepts_valid_record(self):
+        schedule = _schedule()
+        exception = _partial_boundary_exception("PLTR", str(schedule.index[0].date()))
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "exceptions.json"
+            path.write_text(json.dumps({"schema_version": "3.0.0", "exceptions": [exception]}), encoding="utf-8")
+            rows = load_reviewed_coverage_exceptions(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["exception_type"], "PARTIAL_BOUNDARY_SESSION")
+
+    def test_schema_rejects_daily_timeframe(self):
+        schedule = _schedule()
+        exception = _partial_boundary_exception("PLTR", str(schedule.index[0].date()))
+        exception["timeframes_affected"] = ["1D"]
+        exception["evidence_hash"] = coverage_exception_evidence_hash(exception)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "exceptions.json"
+            path.write_text(json.dumps({"schema_version": "3.0.0", "exceptions": [exception]}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "V2_COVERAGE_EXCEPTION_FILE_INVALID"):
+                load_reviewed_coverage_exceptions(path)
+
+    def test_schema_rejects_missing_boundary_trade_timestamp(self):
+        schedule = _schedule()
+        exception = _partial_boundary_exception("PLTR", str(schedule.index[0].date()))
+        exception.pop("boundary_trade_timestamp")
+        exception["evidence_hash"] = coverage_exception_evidence_hash(exception)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "exceptions.json"
+            path.write_text(json.dumps({"schema_version": "3.0.0", "exceptions": [exception]}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "V2_COVERAGE_EXCEPTION_FILE_INVALID"):
+                load_reviewed_coverage_exceptions(path)
+
+    def test_application_forgives_only_missing_bar_on_own_listing_day(self):
+        schedule = _schedule()
+        first_session = schedule.index[0]
+        # drop the first expected 130-min block of the symbol's own first session,
+        # mirroring a real direct-listing/IPO day where trading started mid-session.
+        frame = _intraday(schedule)
+        first_day_rows = frame[frame["Date"].apply(lambda d: pd.Timestamp(d).tz_convert("America/New_York").date() == first_session.date())]
+        frame = frame.drop(first_day_rows.index[:1])
+        exception = _partial_boundary_exception("PLTR", str(first_session.date()))
+        result = calculate_v2_session_coverage(
+            frame, timeframe="130min", symbol="PLTR",
+            target_start="2024-01-02", target_end="2024-12-31",
+            market_schedule=schedule, reviewed_exceptions=[exception],
+        )
+        self.assertEqual(result["coverage_status"], "VALID")
+        self.assertIn("APPROVED_PARTIAL_BOUNDARY_SESSION", result["coverage_exception_reason"])
+        self.assertNotIn("MISSING_INTRADAY_BAR", result["coverage_exception_reason"].split(";"))
+        self.assertEqual(result["approved_partial_boundary_session_dates"], [str(first_session.date())])
+
+    def test_unrelated_gap_on_the_boundary_date_itself_is_not_forgiven(self):
+        # Code-review finding: forgiveness must be scoped to bars strictly before
+        # the recorded boundary_trade_timestamp, not to "any missing bar on the
+        # matched date". Here the exception's boundary_trade_timestamp (13:35 ET)
+        # precedes the dropped bar (the LAST expected 130-min block, ~13:50 ET),
+        # so this is an unrelated, later gap on the same calendar day and must
+        # still fail -- unlike the first-block-only case in the test above.
+        schedule = _schedule()
+        first_session = schedule.index[0]
+        frame = _intraday(schedule)
+        first_day_rows = frame[frame["Date"].apply(lambda d: pd.Timestamp(d).tz_convert("America/New_York").date() == first_session.date())]
+        frame = frame.drop(first_day_rows.index[-1:])
+        exception = _partial_boundary_exception("PLTR", str(first_session.date()))
+        result = calculate_v2_session_coverage(
+            frame, timeframe="130min", symbol="PLTR",
+            target_start="2024-01-02", target_end="2024-12-31",
+            market_schedule=schedule, reviewed_exceptions=[exception],
+        )
+        self.assertEqual(result["coverage_status"], "FAIL")
+        self.assertIn("MISSING_INTRADAY_BAR", result["coverage_exception_reason"].split(";"))
+        self.assertEqual(result["approved_partial_boundary_session_dates"], [])
+
+    def test_same_gap_on_non_boundary_date_is_not_forgiven(self):
+        schedule = _schedule()
+        middle_session = schedule.index[50]
+        frame = _intraday(schedule)
+        middle_day_rows = frame[frame["Date"].apply(lambda d: pd.Timestamp(d).tz_convert("America/New_York").date() == middle_session.date())]
+        frame = frame.drop(middle_day_rows.index[:1])
+        # exception record targets the symbol's real first session, NOT the
+        # mid-series date where the gap actually is -- must not apply there.
+        exception = _partial_boundary_exception("PLTR", str(schedule.index[0].date()))
+        result = calculate_v2_session_coverage(
+            frame, timeframe="130min", symbol="PLTR",
+            target_start="2024-01-02", target_end="2024-12-31",
+            market_schedule=schedule, reviewed_exceptions=[exception],
+        )
+        self.assertEqual(result["coverage_status"], "FAIL")
+        self.assertIn("MISSING_INTRADAY_BAR", result["coverage_exception_reason"].split(";"))
+        self.assertEqual(result["approved_partial_boundary_session_dates"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
