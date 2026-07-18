@@ -3,7 +3,7 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 set "PROJECT_ROOT=%SCRIPT_DIR%.."
 set "SCANNER_PARALLEL_FLAGS=--parallel --workers auto"
-set "DATA_REFRESH_FLAGS=--refresh-latest --parallel --download-workers 4 --aggregation-workers auto"
+set "DATA_REFRESH_FLAGS=--parallel --download-workers 4 --aggregation-workers auto"
 for /f %%A in ('powershell -NoProfile -Command "(Get-Date).ToString('o')"') do set "PIPELINE_START_TS=%%A"
 cd /d "%PROJECT_ROOT%\testdata"
 
@@ -11,7 +11,7 @@ echo Scanner parallel flags: %SCANNER_PARALLEL_FLAGS%
 echo Data refresh flags: %DATA_REFRESH_FLAGS%
 echo.
 echo [1/4] Updating market data...
-python vericekici_updated.py --universe all --feed iex --adjustment all --daily-start 2015-01-01 --intraday-start 2020-07-01 --end today --output-dir hisseler %DATA_REFRESH_FLAGS%
+python vericekici_updated.py --dataset-profile rs_v2_sip --refresh-daily --live %DATA_REFRESH_FLAGS%
 set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" goto failed
 set "DAILY_DATA_UPDATE_RAN=true"

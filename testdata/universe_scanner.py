@@ -358,7 +358,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)
-    data_folder = Path(__file__).resolve().parent / "hisseler"
+    data_folder = Path(__file__).resolve().parent / "research_data" / "rs_v2_sip_market_data"
     if args.alpaca_paper_check:
         run_alpaca_paper_check(
             str(data_folder),
