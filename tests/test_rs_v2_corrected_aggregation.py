@@ -123,6 +123,14 @@ class TestCorrectedFailedRunIntegration(unittest.TestCase):
             if record.get("source_raw_5min_relative_path"):
                 referenced.add(cls.root / record["source_raw_5min_relative_path"])
         cls.before_hashes = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in referenced}
+        # The real dev sandbox may already have a latest_manifest.json pointer from
+        # unrelated, legitimate prior acquisition work -- the audit being offline
+        # means it must not create OR modify that file, not that it must be absent.
+        cls.latest_pointer_path = cls.root / "manifests" / "latest_manifest.json"
+        cls.latest_pointer_existed_before = cls.latest_pointer_path.exists()
+        cls.latest_pointer_hash_before = (
+            hashlib.sha256(cls.latest_pointer_path.read_bytes()).hexdigest() if cls.latest_pointer_existed_before else None
+        )
         cls.temp = tempfile.TemporaryDirectory()
         with v2_offline_audit_guard() as telemetry:
             cls.result = audit_corrected_v2_aggregation(
@@ -186,7 +194,10 @@ class TestCorrectedFailedRunIntegration(unittest.TestCase):
     def test_audit_preserves_all_referenced_files_and_manifest(self):
         after = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in self.before_hashes}
         self.assertEqual(after, self.before_hashes)
-        self.assertFalse((self.root / "manifests" / "latest_manifest.json").exists())
+        if self.latest_pointer_existed_before:
+            self.assertEqual(hashlib.sha256(self.latest_pointer_path.read_bytes()).hexdigest(), self.latest_pointer_hash_before)
+        else:
+            self.assertFalse(self.latest_pointer_path.exists())
 
     def test_zero_network_or_client_calls(self):
         self.assertEqual((self.network_attempt_count, self.client_attempt_count), (0, 0))
