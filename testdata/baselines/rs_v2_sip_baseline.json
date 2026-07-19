@@ -19,7 +19,7 @@
     "short_trading_enabled": false,
     "signal_timing": "last_130min_bar_on_rebalance_date"
   },
-  "generated_at": "2026-07-18T15:53:56.848712Z",
+  "generated_at": "2026-07-19T16:34:41.552666Z",
   "sizing_contract": {
     "cash_bound_function": "calculate_max_shares",
     "commission_per_share": 0,
@@ -49,7 +49,7 @@
   },
   "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock",
   "universe": {
-    "candidate_count": 178,
+    "candidate_count": 177,
     "candidate_symbols": [
       "AAPL",
       "ABBV",
@@ -69,7 +69,6 @@
       "AXP",
       "BA",
       "BAC",
-      "BK",
       "BKNG",
       "BLK",
       "BMY",
@@ -230,7 +229,7 @@
       "YUM",
       "ZS"
     ],
-    "candidate_universe_hash": "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611",
+    "candidate_universe_hash": "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933",
     "excluded_symbols": [
       "DIA",
       "IBB",

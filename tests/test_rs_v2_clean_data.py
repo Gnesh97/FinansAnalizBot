@@ -26,7 +26,7 @@ from testdata.runner import validate_v2_clean_dataset
 
 
 BASELINE = Path(__file__).resolve().parent.parent / "testdata" / "baselines" / "rs_m126_top30_sma100_no_regime_v2_clean_stock.json"
-EXPECTED_HASH = "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611"
+EXPECTED_HASH = "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933"
 SESSION_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "nyse_sessions_2020-07-27_2026-07-07.csv"
 
 
@@ -81,7 +81,7 @@ def _complete_manifest(root: Path):
             raw_integrity = verify_file_integrity(paths.raw_5min)
             record.update({"derivation_type": "AGGREGATED_FROM_RAW_5MIN", "source_raw_5min_relative_path": paths.raw_5min.relative_to(root).as_posix(), "source_raw_5min_sha256": raw_integrity["sha256"], "source_raw_5min_row_count": raw_integrity["row_count"], "aggregation_function": "aggregate_to_130min", "aggregation_schema_version": "1.0.0", "aggregation_timezone": "America/New_York", "derived_row_count": record["row_count"], "derivation_status": "SUCCESS", "raw_downloaded_in_current_run": True, "aggregation_result_status": "BUILT"})
         records.append(record)
-    return {"dataset_schema_version": "2.0.0", "dataset_profile": "rs_v2_clean", "acquisition_run_id": "fixture", "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock", "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "iex", "adjustment": "all", "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0, "status": "VALIDATION_PENDING", "candidate_universe_hash": EXPECTED_HASH, "candidate_count": 178, "retry_telemetry_status": "MEASURED", "provider_attempt_count": 360, "retry_attempt_count": 0, "failed_provider_attempt_count": 0, "files": records}
+    return {"dataset_schema_version": "2.0.0", "dataset_profile": "rs_v2_clean", "acquisition_run_id": "fixture", "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock", "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "iex", "adjustment": "all", "logical_acquisition_item_count": 358, "successful_item_count": 358, "failed_item_count": 0, "status": "VALIDATION_PENDING", "candidate_universe_hash": EXPECTED_HASH, "candidate_count": 177, "retry_telemetry_status": "MEASURED", "provider_attempt_count": 358, "retry_attempt_count": 0, "failed_provider_attempt_count": 0, "files": records}
 
 
 def _invalid_structural_manifest(root: Path):
@@ -105,17 +105,18 @@ def _invalid_structural_manifest(root: Path):
             raw_integrity = verify_file_integrity(raw)
             record.update({"source_raw_5min_relative_path": raw.relative_to(root).as_posix(), "source_raw_5min_sha256": raw_integrity["sha256"], "source_raw_5min_row_count": raw_integrity["row_count"], "derived_row_count": record["row_count"], "derivation_status": "SUCCESS", "raw_downloaded_in_current_run": True, "aggregation_result_status": "BUILT"})
         records.append(record)
-    return {"dataset_schema_version": "2.0.0", "dataset_profile": "rs_v2_clean", "acquisition_run_id": "fixture", "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock", "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "iex", "adjustment": "all", "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0, "status": "VALIDATION_PENDING", "candidate_universe_hash": EXPECTED_HASH, "candidate_count": 178, "retry_telemetry_status": "MEASURED", "provider_attempt_count": 360, "retry_attempt_count": 0, "failed_provider_attempt_count": 0, "files": records}
+    return {"dataset_schema_version": "2.0.0", "dataset_profile": "rs_v2_clean", "acquisition_run_id": "fixture", "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock", "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "iex", "adjustment": "all", "logical_acquisition_item_count": 358, "successful_item_count": 358, "failed_item_count": 0, "status": "VALIDATION_PENDING", "candidate_universe_hash": EXPECTED_HASH, "candidate_count": 177, "retry_telemetry_status": "MEASURED", "provider_attempt_count": 358, "retry_attempt_count": 0, "failed_provider_attempt_count": 0, "files": records}
 
 
 class TestRsV2CleanData(unittest.TestCase):
     def test_frozen_universe_hash_is_baseline_derived_not_legacy_inventory(self):
         symbols, baseline = load_v2_frozen_universe(BASELINE)
-        self.assertEqual(len(symbols), 178)
+        self.assertEqual(len(symbols), 177)
         self.assertEqual(symbols, sorted(symbols))
         self.assertEqual(len(symbols), len(set(symbols)))
         self.assertNotIn("QQQ", symbols)
         self.assertNotIn("SPY", symbols)
+        self.assertNotIn("BK", symbols)
         self.assertEqual(hashlib.sha256(",".join(symbols).encode()).hexdigest(), EXPECTED_HASH)
         self.assertEqual(baseline["universe"]["candidate_universe_hash"], EXPECTED_HASH)
 
@@ -133,11 +134,39 @@ class TestRsV2CleanData(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, V2_UNIVERSE_CONTRACT_MISMATCH):
             load_v2_frozen_universe(legacy)
 
-    def test_plan_is_360_and_unaffected_by_legacy_inventory(self):
+    def test_bk_retirement_universe_loads_as_177_without_bk(self):
+        # Phase 3B: BK retired from the frozen universe (178 -> 177). The active
+        # baseline file must load as exactly 177 symbols with BK absent.
+        symbols, baseline = load_v2_frozen_universe(BASELINE)
+        self.assertEqual(len(symbols), 177)
+        self.assertNotIn("BK", symbols)
+        self.assertEqual(baseline["universe"]["candidate_count"], 177)
+
+    def test_bk_retirement_hash_verification_passes_for_current_untampered_list(self):
+        symbols, baseline = load_v2_frozen_universe(BASELINE)
+        recomputed = hashlib.sha256(",".join(symbols).encode("utf-8")).hexdigest()
+        self.assertEqual(recomputed, baseline["universe"]["candidate_universe_hash"])
+        self.assertEqual(recomputed, EXPECTED_HASH)
+
+    def test_bk_retirement_hash_verification_fails_closed_if_bk_is_reinserted(self):
+        # Tamper: re-insert BK (restoring the old 178-symbol list) without updating
+        # candidate_count/candidate_universe_hash to match -- must be rejected, not
+        # silently accepted as if BK were still approved.
+        tampered = json.loads(BASELINE.read_text(encoding="utf-8"))
+        symbols = tampered["universe"]["candidate_symbols"]
+        insert_at = next(i for i, s in enumerate(symbols) if s > "BK")
+        symbols.insert(insert_at, "BK")
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "tampered_with_bk.json"
+            path.write_text(json.dumps(tampered), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, V2_UNIVERSE_CONTRACT_MISMATCH):
+                load_v2_frozen_universe(path)
+
+    def test_plan_is_358_and_unaffected_by_legacy_inventory(self):
         symbols, _ = load_v2_frozen_universe(BASELINE)
         plan = build_v2_acquisition_plan(Path("unused"), symbols, "2020-07-27", "2026-07-07", "iex", "all")
-        self.assertEqual(len(plan), 360)
-        self.assertEqual(sum(row["asset_role"] == "CANDIDATE" for row in plan), 356)
+        self.assertEqual(len(plan), 358)
+        self.assertEqual(sum(row["asset_role"] == "CANDIDATE" for row in plan), 354)
         self.assertEqual(sum(row["symbol"] == "QQQ" for row in plan), 2)
         self.assertEqual(sum(row["symbol"] == "SPY" for row in plan), 2)
 
@@ -219,7 +248,7 @@ class TestRsV2CleanData(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             manifest = _invalid_structural_manifest(root)
-            manifest["files"][356]["asset_role"] = "CANDIDATE"
+            manifest["files"][354]["asset_role"] = "CANDIDATE"
             run, latest = root / "manifests" / "fixture" / "acquisition_manifest.json", root / "manifests" / "latest_manifest.json"
             with self.assertRaisesRegex(ValueError, "V2_DATASET_NOT_VALIDATED"):
                 finalize_v2_manifest(manifest, run, latest)
@@ -241,7 +270,7 @@ class TestRsV2CleanData(unittest.TestCase):
             credentials.assert_not_called()
             alpaca.assert_not_called()
             self.assertFalse((Path(temp) / "manifests").exists())
-            self.assertEqual(len(pd.read_csv(Path(temp) / "dry_run_reports" / "rs_v2_clean_data_acquisition_plan.csv")), 360)
+            self.assertEqual(len(pd.read_csv(Path(temp) / "dry_run_reports" / "rs_v2_clean_data_acquisition_plan.csv")), 358)
 
     def test_live_v2_requires_overwrite_and_forbids_skip(self):
         from testdata.vericekici_updated import main

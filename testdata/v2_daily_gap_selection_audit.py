@@ -389,7 +389,7 @@ def audit_v2_daily_gap_selection(
     root = Path(dataset_root)
     manifest_path = root / "manifests" / run_id / "acquisition_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    baseline_path = Path(__file__).resolve().parent / "baselines" / "rs_m126_top30_sma100_no_regime_v2_clean_stock.json"
+    baseline_path = Path(__file__).resolve().parent / "baselines" / "archive" / "rs_m126_top30_sma100_no_regime_v2_clean_stock.178symbols.20260718.json"
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     start, end = manifest["target_start_date"], manifest["target_end_date"]
     schedule = _normalize_schedule(approved_nyse_schedule(start, end) if market_schedule is None else market_schedule, start, end)

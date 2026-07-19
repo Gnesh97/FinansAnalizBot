@@ -1,10 +1,10 @@
 {
   "baseline_schema_version": "2.0.0",
   "strategy_identifier": "rs_m126_top30_sma100_no_regime_v2_clean_stock",
-  "generated_at": "2026-07-11T18:00:18Z",
+  "generated_at": "2026-07-19T00:00:00Z",
   "universe": {
-    "candidate_count": 178,
-    "candidate_universe_hash": "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611",
+    "candidate_count": 177,
+    "candidate_universe_hash": "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933",
     "excluded_symbols": [
       "DIA", "IBB", "IWM", "QQQ", "RSP", "SMH", "SOXX", "SPY", "VTI", "XBI",
       "XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV",
@@ -12,7 +12,7 @@
     ],
     "candidate_symbols": [
       "AAPL", "ABBV", "ABNB", "ABT", "ADBE", "AEP", "ALB", "AMAT", "AMD", "AMGN",
-      "AMT", "AMZN", "ANET", "APD", "AVGO", "AXP", "BA", "BAC", "BK", "BKNG",
+      "AMT", "AMZN", "ANET", "APD", "AVGO", "AXP", "BA", "BAC", "BKNG",
       "BLK", "BMY", "BSX", "BX", "C", "CARR", "CAT", "CCL", "CI", "CL",
       "CMCSA", "CME", "CMG", "COF", "COP", "COST", "CRM", "CRWD", "CSCO", "CVS",
       "CVX", "DD", "DDOG", "DE", "DG", "DHR", "DIS", "DLR", "DLTR", "DOW",

@@ -190,14 +190,14 @@ def load_v2_frozen_universe(path: Path = V2_BASELINE_PATH) -> tuple[list[str], d
     digest = hashlib.sha256(",".join(symbols).encode("utf-8")).hexdigest()
     valid = (
         baseline.get("strategy_identifier") == V2_STRATEGY_IDENTIFIER
-        and len(symbols) == 178
+        and len(symbols) == 177
         and len(symbols) == len(set(symbols))
         and symbols == sorted(symbols)
         and not (set(symbols) & excluded)
         and not ({"QQQ", "SPY"} & set(symbols))
-        and universe.get("candidate_count") == 178
+        and universe.get("candidate_count") == 177
         and universe.get("candidate_universe_hash") == digest
-        and digest == "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611"
+        and digest == "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933"
     )
     if not valid:
         raise ValueError(V2_UNIVERSE_CONTRACT_MISMATCH)
@@ -228,7 +228,7 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
         "dataset_schema_version": "2.0.0", "dataset_profile": "rs_v2_clean", "strategy_identifier": V2_STRATEGY_IDENTIFIER,
         "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "iex", "adjustment": "all",
         "candidate_count": len(candidates), "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
-        "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0,
+        "logical_acquisition_item_count": 358, "successful_item_count": 358, "failed_item_count": 0,
     }
     if any(manifest.get(key) != value for key, value in exact.items()) or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
@@ -293,7 +293,7 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
         "dataset_schema_version": "2.1.0", "dataset_profile": "rs_v2_sip", "strategy_identifier": V2_STRATEGY_IDENTIFIER,
         "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "sip", "adjustment": "all",
         "candidate_count": len(candidates), "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
-        "logical_acquisition_item_count": 360, "successful_item_count": 360, "failed_item_count": 0,
+        "logical_acquisition_item_count": 358, "successful_item_count": 358, "failed_item_count": 0,
     }
     other_keys_match = all(manifest.get(key) == value for key, value in exact.items() if key != "target_end_date")
     if manifest.get("refresh_daily"):
@@ -601,7 +601,7 @@ def finalize_v2_manifest(manifest: dict, run_manifest_path: Path, latest_manifes
         committed = json.loads(run_manifest_path.read_text(encoding="utf-8"))
         records = committed.get("files", [])
         logical_keys = {(row.get("symbol"), row.get("timeframe"), row.get("output_relative_path")) for row in records}
-        if committed.get("status") != "VALIDATION_PENDING" or len(records) != 360 or len(logical_keys) != 360:
+        if committed.get("status") != "VALIDATION_PENDING" or len(records) != 358 or len(logical_keys) != 358:
             raise ValueError("V2_IMMUTABLE_MANIFEST_COMMIT_FAILED")
         if profile == "rs_v2_sip":
             validate_v2_sip_manifest_and_files(latest_manifest_path.parents[1], committed)
@@ -969,7 +969,9 @@ def _load_gap_recovery_frozen_context(frozen_root: Path, audit_run: str) -> tupl
     if not manifest_path.exists():
         raise ValueError("GAP_RECOVERY_FROZEN_MANIFEST_MISSING")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    candidates, baseline = load_v2_frozen_universe()
+    baseline_path = BASE_DIR / "baselines" / "archive" / "rs_m126_top30_sma100_no_regime_v2_clean_stock.178symbols.20260718.json"
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    candidates = baseline["universe"]["candidate_symbols"]
     required = {
         "acquisition_run_id": GAP_RECOVERY_AUDIT_RUN,
         "dataset_profile": "rs_v2_clean",
@@ -2672,12 +2674,12 @@ def _main_impl() -> None:
             "target_end_date": args.end,
             "feed": args.feed,
             "adjustment": args.adjustment,
-            "logical_acquisition_item_count": 360,
+            "logical_acquisition_item_count": 358,
             "successful_item_count": 0,
             "failed_item_count": 0,
             "status": "IN_PROGRESS",
-            "candidate_universe_hash": "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611",
-            "candidate_count": 178,
+            "candidate_universe_hash": "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933",
+            "candidate_count": 177,
             "benchmark_symbols": ["QQQ", "SPY"],
             "downloader_source_commit": source_commit,
             "downloader_source_commit_status": "AVAILABLE" if source_commit else "UNAVAILABLE",
@@ -3061,7 +3063,7 @@ def _main_impl() -> None:
         manifest_data["retry_telemetry_status"] = "MEASURED" if telemetry_measured else "UNAVAILABLE"
         if args.refresh_daily:
             manifest_data["retry_attempt_count"] = sum(item["retry_attempt_count"] for item in download_results.values()) if telemetry_measured else None
-            manifest_data["provider_attempt_count"] = 360 + (manifest_data["retry_attempt_count"] or 0) if telemetry_measured else None
+            manifest_data["provider_attempt_count"] = 358 + (manifest_data["retry_attempt_count"] or 0) if telemetry_measured else None
             manifest_data["failed_provider_attempt_count"] = manifest_data["retry_attempt_count"] if telemetry_measured else None
         else:
             manifest_data["provider_attempt_count"] = sum(item["provider_attempt_count"] for item in download_results.values()) if telemetry_measured else None

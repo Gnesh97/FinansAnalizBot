@@ -90,7 +90,7 @@ class TestV2SessionCoverage(unittest.TestCase):
             "status": "VALIDATION_PENDING",
             "files": [
                 {"symbol": f"S{index}", "timeframe": "1D", "output_relative_path": f"f{index}.csv"}
-                for index in range(360)
+                for index in range(358)
             ],
         }
 
@@ -382,8 +382,8 @@ class TestV2SessionCoverage(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "telemetry missing"):
             validate_v2_retry_telemetry({})
         with self.assertRaisesRegex(ValueError, "telemetry invalid"):
-            validate_v2_retry_telemetry({"logical_acquisition_item_count": 360, "retry_telemetry_status": "MEASURED", "provider_attempt_count": 1, "retry_attempt_count": 2, "failed_provider_attempt_count": 0})
-        validate_v2_retry_telemetry({"logical_acquisition_item_count": 360, "retry_telemetry_status": "MEASURED", "provider_attempt_count": 362, "retry_attempt_count": 2, "failed_provider_attempt_count": 2})
+            validate_v2_retry_telemetry({"logical_acquisition_item_count": 358, "retry_telemetry_status": "MEASURED", "provider_attempt_count": 1, "retry_attempt_count": 2, "failed_provider_attempt_count": 0})
+        validate_v2_retry_telemetry({"logical_acquisition_item_count": 358, "retry_telemetry_status": "MEASURED", "provider_attempt_count": 360, "retry_attempt_count": 2, "failed_provider_attempt_count": 2})
         validate_v2_retry_telemetry({"retry_telemetry_status": "UNAVAILABLE", "provider_attempt_count": None, "retry_attempt_count": None, "failed_provider_attempt_count": None})
 
     def test_review_report_lists_unapproved_symbols_without_approval(self):

@@ -337,7 +337,7 @@ def export_v2_clean_baseline_contract(data_folder, repo_root):
         "dataset_profile": "rs_v2_clean",
         "target_start_date": "2020-07-27",
         "target_end_date": "2026-07-07",
-        "logical_acquisition_item_count": 360,
+        "logical_acquisition_item_count": 358,
         "candidate_universe_hash": v2_config["universe"]["candidate_universe_hash"],
         "candidate_count": v2_config["universe"]["candidate_count"],
         "benchmark_symbols": ["QQQ", "SPY"],

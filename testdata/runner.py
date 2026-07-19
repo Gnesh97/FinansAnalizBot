@@ -7621,9 +7621,9 @@ def validate_v2_clean_dataset(data_folder):
             raise ValueError("V2_DATASET_NOT_VALIDATED: adjustment is not all")
         if manifest.get("feed") != "sip":
             raise ValueError("V2_DATASET_NOT_VALIDATED: feed is not sip")
-        if manifest.get("candidate_universe_hash") != "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611":
+        if manifest.get("candidate_universe_hash") != "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933":
             raise ValueError("V2_DATASET_NOT_VALIDATED: candidate universe hash mismatch")
-        if manifest.get("candidate_count") != 178:
+        if manifest.get("candidate_count") != 177:
             raise ValueError("V2_DATASET_NOT_VALIDATED: candidate count mismatch")
         if manifest.get("status") != "COMPLETE_VALIDATED":
             raise ValueError("V2_DATASET_NOT_VALIDATED: manifest status is not COMPLETE_VALIDATED")
@@ -7648,9 +7648,9 @@ def validate_v2_clean_dataset(data_folder):
             raise ValueError("V2_DATASET_NOT_VALIDATED: adjustment is not all")
         if manifest.get("feed") != "iex":
             raise ValueError("V2_DATASET_NOT_VALIDATED: feed is not iex")
-        if manifest.get("candidate_universe_hash") != "0187534f0334d762a99e8d76f4077d44eff833f2d4a782ee8c691734b62c2611":
+        if manifest.get("candidate_universe_hash") != "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933":
             raise ValueError("V2_DATASET_NOT_VALIDATED: candidate universe hash mismatch")
-        if manifest.get("candidate_count") != 178:
+        if manifest.get("candidate_count") != 177:
             raise ValueError("V2_DATASET_NOT_VALIDATED: candidate count mismatch")
         if manifest.get("status") != "COMPLETE_VALIDATED":
             raise ValueError("V2_DATASET_NOT_VALIDATED: manifest status is not COMPLETE_VALIDATED")

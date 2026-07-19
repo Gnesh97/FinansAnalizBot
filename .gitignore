@@ -8,6 +8,7 @@
 # Python environments and caches
 .venv/
 venv/
+.venv_linux/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -58,7 +59,7 @@ testdata/state/broker_order_ledger.csv.lock
 testdata/state/broker_order_ledger.csv.*.tmp
 
 # Tooling repos and generated outputs
-ECC/
+ECC
 .understand-anything/
 .agents/
 .claude/
