@@ -223,6 +223,48 @@ class TestRsV2CleanData(unittest.TestCase):
                 finalize_v2_manifest({"acquisition_run_id": "bad", "status": "INCOMPLETE"}, root / "manifests" / "bad" / "acquisition_manifest.json", latest)
             self.assertEqual(json.loads(latest.read_text(encoding="utf-8")), {"stable": True})
 
+    def test_validate_v2_clean_dataset_accepts_358_rejects_357_and_359(self):
+        # Regression coverage for the Phase 4A stale-constant bug: runner.py's
+        # validate_v2_clean_dataset once hardcoded 360/356 (the pre-BK-retirement
+        # (178+2)*2 / 178*2 counts) even after the frozen universe moved to 177.
+        # This proves the corrected 358/354 boundary is exact in both directions.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run_path = root / "manifests" / "run1" / "acquisition_manifest.json"
+            latest_path = root / "manifests" / "latest_manifest.json"
+            manifest = _complete_manifest(root)
+            manifest["acquisition_run_id"] = "run1"
+            for record in manifest["files"]:
+                record["acquisition_run_id"] = "run1"
+            with patch("testdata.vericekici_updated.approved_nyse_schedule", return_value=_validation_schedule()):
+                finalize_v2_manifest(manifest, run_path, latest_path)
+
+                committed = json.loads(run_path.read_text(encoding="utf-8"))
+                self.assertEqual(len(committed["files"]), 358)
+                validate_v2_clean_dataset(root)  # 358: accepted, must not raise
+
+                def _commit_corrupted(files):
+                    corrupted = dict(committed)
+                    corrupted["files"] = files
+                    run_path.write_text(json.dumps(corrupted), encoding="utf-8")
+                    pointer = json.loads(latest_path.read_text(encoding="utf-8"))
+                    pointer["immutable_manifest_sha256"] = hashlib.sha256(run_path.read_bytes()).hexdigest()
+                    latest_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+                _commit_corrupted(committed["files"][:-1])  # 357
+                with self.assertRaisesRegex(ValueError, "V2_DATASET_NOT_VALIDATED"):
+                    validate_v2_clean_dataset(root)
+
+                extra_record = dict(committed["files"][-1])
+                extra_record["symbol"] = "ZZZZ_NOT_A_REAL_SYMBOL"
+                extra_record["output_relative_path"] = "daily/ZZZZ_NOT_A_REAL_SYMBOL_1D.csv"
+                _commit_corrupted(committed["files"] + [extra_record])  # 359
+                with self.assertRaisesRegex(ValueError, "V2_DATASET_NOT_VALIDATED"):
+                    validate_v2_clean_dataset(root)
+
+                _commit_corrupted(committed["files"])  # restore exact 358
+                validate_v2_clean_dataset(root)  # accepted again, proving the boundary is exact
+
     def test_runner_rejects_orphaned_latest_pointer(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

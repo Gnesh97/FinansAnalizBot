@@ -7662,9 +7662,9 @@ def validate_v2_clean_dataset(data_folder):
     }
 
     files = manifest.get("files", [])
-    if len(files) != 360 or manifest.get("logical_acquisition_item_count") != 360:
-        raise ValueError(f"V2_DATASET_NOT_VALIDATED: expected 360 files in manifest, got {len(files)}")
-    if manifest.get("successful_item_count") != 360 or manifest.get("failed_item_count") != 0:
+    if len(files) != 358 or manifest.get("logical_acquisition_item_count") != 358:
+        raise ValueError(f"V2_DATASET_NOT_VALIDATED: expected 358 files in manifest, got {len(files)}")
+    if manifest.get("successful_item_count") != 358 or manifest.get("failed_item_count") != 0:
         raise ValueError("V2_DATASET_NOT_VALIDATED: manifest count reconciliation failed")
     seen, role_counts, symbol_counts = set(), {"CANDIDATE": 0, "PRIMARY_BENCHMARK": 0, "SECONDARY_BENCHMARK": 0}, {"QQQ": 0, "SPY": 0}
     for file_record in files:
@@ -7720,7 +7720,7 @@ def validate_v2_clean_dataset(data_folder):
             source = folder / raw_path
             if file_record.get("derivation_type") != "AGGREGATED_FROM_RAW_5MIN" or file_record.get("derivation_status") != "SUCCESS" or not raw_path or not source.exists() or hashlib.sha256(source.read_bytes()).hexdigest() != file_record.get("source_raw_5min_sha256"):
                 raise ValueError("V2_DATASET_NOT_VALIDATED: raw-to-130min lineage mismatch")
-    if role_counts != {"CANDIDATE": 356, "PRIMARY_BENCHMARK": 2, "SECONDARY_BENCHMARK": 2} or symbol_counts != {"QQQ": 2, "SPY": 2}:
+    if role_counts != {"CANDIDATE": 354, "PRIMARY_BENCHMARK": 2, "SECONDARY_BENCHMARK": 2} or symbol_counts != {"QQQ": 2, "SPY": 2}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: role count mismatch")
 
 
