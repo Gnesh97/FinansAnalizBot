@@ -12,7 +12,7 @@ import schedule
 import threading
 import subprocess
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import requests
 import matplotlib
@@ -179,7 +179,7 @@ def parse_args():
     )
     parser.add_argument(
         "--mode",
-        choices=["status", "local-paper", "execution-preview", "pre-submit-check", "alpaca-check", "backup", "interactive"],
+        choices=["status", "local-paper", "execution-preview", "pre-submit-check", "alpaca-check", "backup", "interactive", "dss-report"],
         default="status",
         help="Run mode selection. Default is status."
     )
@@ -187,6 +187,11 @@ def parse_args():
         "--verbose",
         action="store_true",
         help="Enable detailed logging."
+    )
+    parser.add_argument(
+        "--print-only",
+        action="store_true",
+        help="dss-report mode only: render the report to stdout/file, never send to Telegram."
     )
     return parser.parse_args()
 
@@ -462,6 +467,72 @@ def run_backup(args):
                 print(f"Copied: {filename}")
                 
     print(f"\n✅ Backup complete: {copied} files saved to {backup_dir.resolve()}")
+
+
+# =====================================================================
+# DSS (DECISION SUPPORT) DAILY BUY/SELL REPORT -- READ-ONLY, MANUAL TRIGGER
+# =====================================================================
+# No broker/order/live-trading call exists anywhere in this section.
+assert BROKER_SUBMIT_ENABLED is False
+assert LIVE_TRADING_ENABLED is False
+assert SHORT_TRADING_ENABLED is False
+
+
+def send_dss_report_message(text, chat_id):
+    """Small, mockable wrapper around send_telegram_message. Never called
+    with broker/order parameters -- text and chat_id only."""
+    return send_telegram_message(text, chat_id)
+
+
+def run_dss_report(args):
+    print("==================================================")
+    print("📋 [MODE] Mode: dss-report")
+    print("==================================================")
+
+    from testdata.dss_report import generate_dss_report, render_dss_report_text
+
+    data_folder = BASE_DIR / "testdata" / "research_data" / "rs_v2_sip_market_data"
+    reports_dir = BASE_DIR / "reports" / "dss"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    artifact_path = reports_dir / f"dss_report_{timestamp}.md"
+
+    try:
+        report = generate_dss_report(data_folder)
+        text = render_dss_report_text(report)
+    except Exception as e:
+        text = f"DSS did not run today: {e}"
+        artifact_path.write_text(text, encoding="utf-8")
+        print(text)
+        print(f"\nSaved: {artifact_path}")
+        if args.print_only:
+            print("\n--print-only: not sending to Telegram.")
+            return
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            print("ERROR: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set in .env -- "
+                  "failure notice NOT sent (fail-closed locally, not sent to a wrong/missing chat).")
+            return
+        send_dss_report_message(text, TELEGRAM_CHAT_ID)
+        return
+
+    artifact_path.write_text(text, encoding="utf-8")
+    print(text)
+    print(f"\nSaved: {artifact_path}")
+
+    if args.print_only:
+        print("\n--print-only: not sending to Telegram.")
+        return
+
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("ERROR: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set in .env -- "
+              "refusing to send (fail-closed locally, not sent to a wrong/missing chat).")
+        return
+
+    sent = send_dss_report_message(text, TELEGRAM_CHAT_ID)
+    if sent:
+        print("✅ DSS report sent to Telegram.")
+    else:
+        print("❌ Failed to send DSS report to Telegram (see error above).")
 
 
 # =====================================================================
@@ -1057,6 +1128,8 @@ def main():
         run_backup(args)
     elif args.mode == "interactive":
         run_interactive_cockpit()
+    elif args.mode == "dss-report":
+        run_dss_report(args)
 
 if __name__ == "__main__":
     main()
