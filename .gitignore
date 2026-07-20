@@ -39,6 +39,7 @@ Thumbs.db
 # Large/local data directories
 testdata/hisseler*/
 testdata/reports/
+reports/dss/
 testdata/backups/
 testdata/scratch/
 testdata/research_data/
