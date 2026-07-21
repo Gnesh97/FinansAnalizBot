@@ -224,16 +224,20 @@ def validate_v2_manifest_and_files(dataset_root: Path, manifest: dict, frozen_ba
     candidates, baseline = load_v2_frozen_universe(V2_BASELINE_PATH)
     if frozen_baseline is not None and frozen_baseline.get("strategy_identifier") != V2_STRATEGY_IDENTIFIER:
         raise ValueError(V2_UNIVERSE_CONTRACT_MISMATCH)
+    item_count = manifest.get("logical_acquisition_item_count", 358)
+    if item_count not in (179, 358):
+        raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
+    include_intraday = (item_count == 358)
     exact = {
-        "dataset_schema_version": "2.0.0", "dataset_profile": "rs_v2_clean", "strategy_identifier": V2_STRATEGY_IDENTIFIER,
+        "dataset_schema_version": manifest.get("dataset_schema_version", "2.0.0"), "dataset_profile": "rs_v2_clean", "strategy_identifier": V2_STRATEGY_IDENTIFIER,
         "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "iex", "adjustment": "all",
         "candidate_count": len(candidates), "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
-        "logical_acquisition_item_count": 358, "successful_item_count": 358, "failed_item_count": 0,
+        "logical_acquisition_item_count": item_count, "successful_item_count": item_count, "failed_item_count": 0,
     }
     if any(manifest.get(key) != value for key, value in exact.items()) or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
     validate_v2_retry_telemetry(manifest)
-    expected = {(row["symbol"], row["timeframe"]): row for row in build_v2_acquisition_plan(root, candidates, manifest.get("target_start_date"), manifest.get("target_end_date"), "iex", "all")}
+    expected = {(row["symbol"], row["timeframe"]): row for row in build_v2_acquisition_plan(root, candidates, manifest.get("target_start_date"), manifest.get("target_end_date"), "iex", "all", include_intraday=include_intraday)}
     actual = {}
     for record in manifest.get("files", []):
         key = (record.get("symbol"), record.get("timeframe"))
@@ -289,11 +293,15 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
     candidates, baseline = load_v2_frozen_universe(V2_BASELINE_PATH)
     if frozen_baseline is not None and frozen_baseline.get("strategy_identifier") != V2_STRATEGY_IDENTIFIER:
         raise ValueError(V2_UNIVERSE_CONTRACT_MISMATCH)
+    item_count = manifest.get("logical_acquisition_item_count", 358)
+    if item_count not in (179, 358):
+        raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
+    include_intraday = (item_count == 358)
     exact = {
-        "dataset_schema_version": "2.1.0", "dataset_profile": "rs_v2_sip", "strategy_identifier": V2_STRATEGY_IDENTIFIER,
+        "dataset_schema_version": manifest.get("dataset_schema_version", "2.1.0"), "dataset_profile": "rs_v2_sip", "strategy_identifier": V2_STRATEGY_IDENTIFIER,
         "target_start_date": "2020-07-27", "target_end_date": "2026-07-07", "feed": "sip", "adjustment": "all",
         "candidate_count": len(candidates), "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
-        "logical_acquisition_item_count": 358, "successful_item_count": 358, "failed_item_count": 0,
+        "logical_acquisition_item_count": item_count, "successful_item_count": item_count, "failed_item_count": 0,
     }
     other_keys_match = all(manifest.get(key) == value for key, value in exact.items() if key != "target_end_date")
     if manifest.get("refresh_daily"):
@@ -304,7 +312,7 @@ def validate_v2_sip_manifest_and_files(dataset_root: Path, manifest: dict, froze
     if not other_keys_match or not target_end_date_valid or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
     validate_v2_retry_telemetry(manifest)
-    expected = {(row["symbol"], row["timeframe"]): row for row in build_v2_acquisition_plan(root, candidates, manifest.get("target_start_date"), manifest.get("target_end_date"), "sip", "all")}
+    expected = {(row["symbol"], row["timeframe"]): row for row in build_v2_acquisition_plan(root, candidates, manifest.get("target_start_date"), manifest.get("target_end_date"), "sip", "all", include_intraday=include_intraday)}
     actual = {}
     for record in manifest.get("files", []):
         key = (record.get("symbol"), record.get("timeframe"))
@@ -381,12 +389,13 @@ def freeze_v2_sip_baseline() -> None:
     print(f"SIP baseline successfully frozen and written to {V2_SIP_BASELINE_PATH}", flush=True)
 
 
-def build_v2_acquisition_plan(output_root: Path, candidates: list[str], start: str, end: str, feed: str, adjustment: str) -> list[dict]:
+def build_v2_acquisition_plan(output_root: Path, candidates: list[str], start: str, end: str, feed: str, adjustment: str, include_intraday: bool = True) -> list[dict]:
     rows = []
     for symbol in [*candidates, "QQQ", "SPY"]:
         paths = resolve_v2_dataset_paths(output_root, symbol)
         role = V2_BENCHMARK_ROLES.get(symbol, "CANDIDATE")
-        for timeframe, path in (("1D", paths.daily), ("130min", paths.bars_130min)):
+        timeframes = (("1D", paths.daily), ("130min", paths.bars_130min)) if include_intraday else (("1D", paths.daily),)
+        for timeframe, path in timeframes:
             rows.append({"symbol": symbol, "timeframe": timeframe, "requested_start": start, "requested_end": end, "feed": feed, "adjustment": adjustment, "output_relative_path": path.relative_to(output_root).as_posix(), "asset_role": role})
     return rows
 
@@ -601,7 +610,8 @@ def finalize_v2_manifest(manifest: dict, run_manifest_path: Path, latest_manifes
         committed = json.loads(run_manifest_path.read_text(encoding="utf-8"))
         records = committed.get("files", [])
         logical_keys = {(row.get("symbol"), row.get("timeframe"), row.get("output_relative_path")) for row in records}
-        if committed.get("status") != "VALIDATION_PENDING" or len(records) != 358 or len(logical_keys) != 358:
+        expected_count = committed.get("logical_acquisition_item_count", 358)
+        if committed.get("status") != "VALIDATION_PENDING" or len(records) != expected_count or len(logical_keys) != expected_count:
             raise ValueError("V2_IMMUTABLE_MANIFEST_COMMIT_FAILED")
         if profile == "rs_v2_sip":
             validate_v2_sip_manifest_and_files(latest_manifest_path.parents[1], committed)

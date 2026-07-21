@@ -126,6 +126,8 @@ def _daily_ohlcv_from_frame(df):
     daily_source = df.attrs.get("daily_ohlcv")
     if isinstance(daily_source, pd.DataFrame) and not daily_source.empty:
         return daily_source.copy()
+    if df.attrs.get("is_daily", False) or df.attrs.get("daily_timeframe") == "1D":
+        return df.copy()
     aggregations = {
         "Open": "first",
         "High": "max",

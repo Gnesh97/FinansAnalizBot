@@ -1615,7 +1615,7 @@ def _write_data_audit(symbols, daily_dir, intraday_dir, latest_dir, run_dir):
     return audit
 
 
-def _prepared_cache_key(data_folder, intraday_dir, daily_dir, intraday_timeframe, daily_timeframe, start_date, end_date, symbols):
+def _prepared_cache_key(data_folder, intraday_dir, daily_dir, intraday_timeframe, daily_timeframe, start_date, end_date, symbols, legacy_intraday=False):
     key = {
         "cache_version": PREPARED_CACHE_VERSION,
         "data_folder": str(Path(data_folder).resolve()),
@@ -1626,6 +1626,7 @@ def _prepared_cache_key(data_folder, intraday_dir, daily_dir, intraday_timeframe
         "start_date": start_date,
         "end_date": end_date,
         "symbols": list(symbols),
+        "legacy_intraday": bool(legacy_intraday),
     }
     digest = hashlib.sha256(repr(sorted(key.items())).encode("utf-8")).hexdigest()[:24]
     return key, digest
@@ -1648,6 +1649,7 @@ def _load_or_build_prepared_cache(
     symbols,
     force_rebuild=False,
     timing=None,
+    legacy_intraday=False,
 ):
     cache_key, digest = _prepared_cache_key(
         data_folder,
@@ -1658,6 +1660,7 @@ def _load_or_build_prepared_cache(
         start_date,
         end_date,
         symbols,
+        legacy_intraday=legacy_intraday,
     )
     cache_path = _prepared_cache_path(data_folder, digest)
     if cache_path.exists() and not force_rebuild:
@@ -1697,21 +1700,30 @@ def _load_or_build_prepared_cache(
     build_started = _now()
     csv_timing = _TimingCollector() if timing is None else timing
     for symbol in symbols:
-        intraday_path = intraday_dir / f"{symbol}_130min.csv"
         daily_path = daily_dir / f"{symbol}_1D.csv"
-        if not intraday_path.exists() or not daily_path.exists():
+        if not daily_path.exists():
             continue
-        intraday = _slice_frame(_normalize_frame_timed(intraday_path, csv_timing), start_date, end_date)
         daily = _slice_frame(_normalize_frame_timed(daily_path, csv_timing), start_date, end_date)
-        if intraday.empty or daily.empty:
+        if daily.empty:
             continue
         daily = _add_donchian_precomputed_features(daily)
-        intraday.attrs["daily_ohlcv"] = daily
-        intraday.attrs["intraday_data_dir"] = str(intraday_dir)
-        intraday.attrs["daily_data_dir"] = str(daily_dir)
-        intraday.attrs["intraday_timeframe"] = intraday_timeframe
-        intraday.attrs["daily_timeframe"] = daily_timeframe
-        asset_data[symbol] = intraday
+        daily.attrs["is_daily"] = True
+        daily.attrs["daily_data_dir"] = str(daily_dir)
+        daily.attrs["daily_timeframe"] = daily_timeframe
+
+        intraday_path = intraday_dir / f"{symbol}_130min.csv"
+        if legacy_intraday and intraday_path.exists():
+            intraday = _slice_frame(_normalize_frame_timed(intraday_path, csv_timing), start_date, end_date)
+            if not intraday.empty:
+                intraday.attrs["daily_ohlcv"] = daily
+                intraday.attrs["intraday_data_dir"] = str(intraday_dir)
+                intraday.attrs["daily_data_dir"] = str(daily_dir)
+                intraday.attrs["intraday_timeframe"] = intraday_timeframe
+                intraday.attrs["daily_timeframe"] = daily_timeframe
+                asset_data[symbol] = intraday
+                continue
+
+        asset_data[symbol] = daily
     if not asset_data:
         raise ValueError("Prepared cache build failed: usable 130min/daily symbol data not found.")
     csv_read_sec = sum(
