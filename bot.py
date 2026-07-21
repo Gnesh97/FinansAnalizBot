@@ -193,6 +193,13 @@ def parse_args():
         action="store_true",
         help="dss-report mode only: render the report to stdout/file, never send to Telegram."
     )
+    parser.add_argument(
+        "--dss-data-profile",
+        choices=["rs_v2_sip", "rs_v2_clean"],
+        default="rs_v2_sip",
+        help="dss-report mode only: which validated dataset profile to read. "
+             "Default rs_v2_sip; rs_v2_clean selects the IEX-feed dataset."
+    )
     return parser.parse_args()
 
 # Mode status
@@ -491,7 +498,8 @@ def run_dss_report(args):
 
     from testdata.dss_report import generate_dss_report, render_dss_report_text
 
-    data_folder = BASE_DIR / "testdata" / "research_data" / "rs_v2_sip_market_data"
+    dss_data_profile = getattr(args, "dss_data_profile", "rs_v2_sip")
+    data_folder = BASE_DIR / "testdata" / "research_data" / f"{dss_data_profile}_market_data"
     reports_dir = BASE_DIR / "reports" / "dss"
     reports_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

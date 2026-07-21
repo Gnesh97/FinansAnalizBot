@@ -356,9 +356,17 @@ if __name__ == "__main__":
         default=None,
         help="Specify a single experiment to run by name; V2 is not run by default."
     )
+    parser.add_argument(
+        "--data-profile",
+        choices=["rs_v2_sip", "rs_v2_clean"],
+        default="rs_v2_sip",
+        help="Which validated dataset profile to read for all modes that use the "
+             "default data folder. Default rs_v2_sip; rs_v2_clean selects the "
+             "IEX-feed dataset. Explicit opt-in only -- never silently repointed."
+    )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)
-    data_folder = Path(__file__).resolve().parent / "research_data" / "rs_v2_sip_market_data"
+    data_folder = Path(__file__).resolve().parent / "research_data" / f"{args.data_profile}_market_data"
     if args.alpaca_paper_check:
         run_alpaca_paper_check(
             str(data_folder),
