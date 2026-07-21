@@ -1658,7 +1658,7 @@ def _download_symbol_worker(payload: dict) -> dict:
             if warning:
                 result["warnings"].append(warning)
 
-        if raw_path.exists() and not overwrite and not refresh_latest:
+        if payload.get("skip_raw_5min") or (raw_path.exists() and not overwrite and not refresh_latest):
             result["raw_5min_status"] = "skipped"
         else:
             existing = read_existing_bars(raw_path)
@@ -2126,6 +2126,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # V2 profile options
     parser.add_argument("--dataset-profile", choices=["rs_v2_clean", "rs_v2_sip"], default=None)
+    parser.add_argument("--daily-only", action="store_true")
     parser.add_argument("--start", default=None)
     parser.add_argument("--output-root", default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -2467,13 +2468,17 @@ def _main_impl() -> None:
             raise ValueError("V2 profile requires either --dry-run or --live")
         if args.dry_run and args.live:
             raise ValueError("Cannot specify both --dry-run and --live")
-        if args.live and not args.overwrite:
+        if args.live and not args.refresh_daily and not args.overwrite:
             raise ValueError("V2 LIVE initial acquisition requires --overwrite")
         if args.live and (args.refresh_latest or args.skip_download or args.only_aggregate_130min):
             raise ValueError("V2 LIVE initial acquisition forbids refresh/skip/aggregate-only")
 
         # V2 target dates enforcement
-        if args.start != "2020-07-27" or args.end != "2026-07-07":
+        if args.refresh_daily:
+            today_str = args.end if (args.end and args.end != "2026-07-07") else datetime.now(timezone.utc).date().isoformat()
+            market_schedule = approved_nyse_schedule("2020-07-27", today_str)
+            args.end = market_schedule.index[-1].strftime("%Y-%m-%d")
+        elif args.start != "2020-07-27" or args.end != "2026-07-07":
             raise ValueError("V2 profile target dates must be start=2020-07-27, end=2026-07-07")
 
         output_dir = Path(args.output_root)
@@ -2688,7 +2693,7 @@ def _main_impl() -> None:
             "target_end_date": args.end,
             "feed": args.feed,
             "adjustment": args.adjustment,
-            "logical_acquisition_item_count": 358,
+            "logical_acquisition_item_count": 179 if args.daily_only else 358,
             "successful_item_count": 0,
             "failed_item_count": 0,
             "status": "IN_PROGRESS",
@@ -2745,6 +2750,7 @@ def _main_impl() -> None:
             "drift_check_start": drift_check_start,
             "overwrite": args.overwrite,
             "skip_download": args.skip_download or args.only_aggregate_130min or (symbol in refresh_daily_terminated_symbols),
+            "skip_raw_5min": args.daily_only,
             "allow_row_count_reduction": args.allow_row_count_reduction,
         })
 
@@ -3011,56 +3017,57 @@ def _main_impl() -> None:
             else:
                 failed_count += 1
 
-            # Verify intraday file
-            intraday_path = paths.bars_130min
-            raw_path = paths.raw_5min
-            intraday_integrity = verify_file_integrity(intraday_path)
-            raw_integrity = verify_file_integrity(raw_path)
-            intraday_coverage = v2_coverage_metadata(
-                intraday_path, "130min", symbol, args.start, args.end,
-                market_schedule=market_schedule, reviewed_exceptions=reviewed_exceptions,
-            )
-            intraday_success = (
-                intraday_integrity["data_status"] == "VALID"
-                and raw_integrity["data_status"] == "VALID"
-                and intraday_integrity["row_count"] > 0
-                and raw_integrity["row_count"] > 0
-            )
+            if not args.daily_only:
+                # Verify intraday file
+                intraday_path = paths.bars_130min
+                raw_path = paths.raw_5min
+                intraday_integrity = verify_file_integrity(intraday_path)
+                raw_integrity = verify_file_integrity(raw_path)
+                intraday_coverage = v2_coverage_metadata(
+                    intraday_path, "130min", symbol, args.start, args.end,
+                    market_schedule=market_schedule, reviewed_exceptions=reviewed_exceptions,
+                )
+                intraday_success = (
+                    intraday_integrity["data_status"] == "VALID"
+                    and raw_integrity["data_status"] == "VALID"
+                    and intraday_integrity["row_count"] > 0
+                    and raw_integrity["row_count"] > 0
+                )
 
-            intraday_record = {
-                "symbol": symbol,
-                "asset_role": role,
-                "timeframe": "130min",
-                "requested_start": args.start,
-                "requested_end": args.end,
-                "request_end_semantics": "INCLUSIVE",
-                "feed": args.feed,
-                "adjustment": args.adjustment,
-                "output_relative_path": str(intraday_path.relative_to(output_dir)).replace("\\", "/"),
-                "acquisition_run_id": run_id,
-                "acquisition_action": "DERIVED_IN_CURRENT_RUN",
-                "downloaded_in_current_run": raw_status == "downloaded",
-                "provider_result_status": raw_status.upper(),
-                "raw_downloaded_in_current_run": raw_status == "downloaded",
-                "aggregation_result_status": aggregation_results.get(symbol, {}).get("bar_130min_status", "FAILED").upper(),
-                **intraday_coverage,
-                "derivation_type": "AGGREGATED_FROM_RAW_5MIN",
-                "source_raw_5min_relative_path": str(raw_path.relative_to(output_dir)).replace("\\", "/"),
-                "source_raw_5min_sha256": raw_integrity["sha256"],
-                "source_raw_5min_row_count": raw_integrity["row_count"],
-                "aggregation_function": "aggregate_to_130min",
-                "aggregation_schema_version": "1.0.0",
-                "aggregation_timezone": "America/New_York",
-                "derived_row_count": intraday_integrity["row_count"],
-                "derivation_status": "SUCCESS" if intraday_integrity["data_status"] == "VALID" and raw_integrity["data_status"] == "VALID" else "FAILED",
-                **intraday_integrity,
-                "request_status": "SUCCESS" if intraday_success and (raw_status == "downloaded" or (args.refresh_daily and raw_status in {"refreshed", "skipped"})) and (aggregation_results.get(symbol, {}).get("bar_130min_status") in {"built", "skipped"} if args.refresh_daily else aggregation_results.get(symbol, {}).get("bar_130min_status") == "built") else "FAILED"
-            }
-            file_records.append(intraday_record)
-            if intraday_record["request_status"] == "SUCCESS":
-                successful_count += 1
-            else:
-                failed_count += 1
+                intraday_record = {
+                    "symbol": symbol,
+                    "asset_role": role,
+                    "timeframe": "130min",
+                    "requested_start": args.start,
+                    "requested_end": args.end,
+                    "request_end_semantics": "INCLUSIVE",
+                    "feed": args.feed,
+                    "adjustment": args.adjustment,
+                    "output_relative_path": str(intraday_path.relative_to(output_dir)).replace("\\", "/"),
+                    "acquisition_run_id": run_id,
+                    "acquisition_action": "DERIVED_IN_CURRENT_RUN",
+                    "downloaded_in_current_run": raw_status == "downloaded",
+                    "provider_result_status": raw_status.upper(),
+                    "raw_downloaded_in_current_run": raw_status == "downloaded",
+                    "aggregation_result_status": aggregation_results.get(symbol, {}).get("bar_130min_status", "FAILED").upper(),
+                    **intraday_coverage,
+                    "derivation_type": "AGGREGATED_FROM_RAW_5MIN",
+                    "source_raw_5min_relative_path": str(raw_path.relative_to(output_dir)).replace("\\", "/"),
+                    "source_raw_5min_sha256": raw_integrity["sha256"],
+                    "source_raw_5min_row_count": raw_integrity["row_count"],
+                    "aggregation_function": "aggregate_to_130min",
+                    "aggregation_schema_version": "1.0.0",
+                    "aggregation_timezone": "America/New_York",
+                    "derived_row_count": intraday_integrity["row_count"],
+                    "derivation_status": "SUCCESS" if intraday_integrity["data_status"] == "VALID" and raw_integrity["data_status"] == "VALID" else "FAILED",
+                    **intraday_integrity,
+                    "request_status": "SUCCESS" if intraday_success and (raw_status == "downloaded" or (args.refresh_daily and raw_status in {"refreshed", "skipped"})) and (aggregation_results.get(symbol, {}).get("bar_130min_status") in {"built", "skipped"} if args.refresh_daily else aggregation_results.get(symbol, {}).get("bar_130min_status") == "built") else "FAILED"
+                }
+                file_records.append(intraday_record)
+                if intraday_record["request_status"] == "SUCCESS":
+                    successful_count += 1
+                else:
+                    failed_count += 1
 
         manifest_data["files"] = file_records
         manifest_data["successful_item_count"] = successful_count

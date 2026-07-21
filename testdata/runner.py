@@ -1651,6 +1651,8 @@ def _load_or_build_prepared_cache(
     timing=None,
     legacy_intraday=False,
 ):
+    intraday_dir = Path(intraday_dir)
+    daily_dir = Path(daily_dir)
     cache_key, digest = _prepared_cache_key(
         data_folder,
         intraday_dir,
