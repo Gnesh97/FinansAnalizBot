@@ -2434,6 +2434,10 @@ def _main_impl() -> None:
     adjustment_passed = any(arg.startswith("--adjustment") for arg in sys.argv)
     feed_passed = any(arg.startswith("--feed") for arg in sys.argv)
 
+    # Drift detection only applies to SIP --refresh-daily; every other
+    # acquisition path must carry an explicit None in its download payloads.
+    drift_check_start = None
+
     if is_v2_clean:
         if not adjustment_passed:
             raise ValueError("V2 profile requires explicit --adjustment parameter")
