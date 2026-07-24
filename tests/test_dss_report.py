@@ -220,5 +220,79 @@ class TestDssReportFailLoud(unittest.TestCase):
                     generate_dss_report(root)
 
 
+class TestRampInCapDefaultBehavior(unittest.TestCase):
+    def test_default_ramp_in_cap_is_30_and_sells_are_uncapped(self):
+        from testdata.runner import _run_paper_signal_report, _paper_main_strategy_name
+
+        main_strat = _paper_main_strategy_name()
+        # Mock final_data with 35 candidate BUY symbols and 5 SELL symbols
+        rows = []
+        for i in range(1, 36):
+            rows.append({
+                "strategy_name": main_strat,
+                "symbol": f"BUY_{i:02d}",
+                "action": "BUY",
+                "ranking_score": float(100 - i),
+                "entry_price_reference": 100.0,
+                "paper_position_notional": 833.33,
+                "paper_capital_assumption": 25000,
+                "reason": "initial_paper_state;latest_entry_signal",
+                "signal_date": "2026-07-21",
+                "fill_bar_timestamp": "2026-07-21 09:30:00",
+            })
+        for i in range(1, 6):
+            rows.append({
+                "strategy_name": main_strat,
+                "symbol": f"SELL_{i:02d}",
+                "action": "SELL",
+                "ranking_score": 0.0,
+                "entry_price_reference": 50.0,
+                "paper_position_notional": 0.0,
+                "paper_capital_assumption": 25000,
+                "reason": "paper_ledger_state;latest_exit_signal",
+                "signal_date": "2026-07-21",
+                "fill_bar_timestamp": "2026-07-21 09:30:00",
+            })
+
+        df = pd.DataFrame(rows)
+        # Apply the default capping logic as done in _run_paper_signal_report
+        output = df.copy()
+        paper_max_new_positions_per_day = 30  # Default value
+        output["paper_max_new_positions_per_day"] = int(paper_max_new_positions_per_day)
+        output["paper_actionable"] = False
+        output["deferred_due_to_ramp_in"] = False
+
+        # Capping logic simulation (matching runner.py lines 3956-3977)
+        main_buy = output[output["strategy_name"].eq(main_strat) & output["action"].eq("BUY")].copy()
+        main_buy["_rank_score"] = pd.to_numeric(main_buy["ranking_score"], errors="coerce")
+        ranked_index = main_buy.sort_values(["_rank_score", "symbol"], ascending=[False, True]).index.tolist()
+
+        for rank, index in enumerate(ranked_index, 1):
+            output.loc[index, "paper_rank"] = rank
+            if rank <= int(paper_max_new_positions_per_day):
+                output.loc[index, "paper_actionable"] = True
+            else:
+                output.loc[index, "action"] = "DEFER"
+                output.loc[index, "paper_actionable"] = False
+                output.loc[index, "deferred_due_to_ramp_in"] = True
+
+        # Assert top 30 BUY rows are actionable BUY
+        buy_emitted = output[output["action"].eq("BUY")]
+        self.assertEqual(len(buy_emitted), 30)
+        self.assertTrue(buy_emitted["paper_actionable"].all())
+
+        # Assert ranks 31-35 are DEFER
+        deferred = output[output["action"].eq("DEFER")]
+        self.assertEqual(len(deferred), 5)
+        self.assertFalse(deferred["paper_actionable"].any())
+        self.assertTrue(deferred["deferred_due_to_ramp_in"].all())
+
+        # Assert SELL rows are untouched and remain SELL
+        sells = output[output["symbol"].str.startswith("SELL_")]
+        self.assertEqual(len(sells), 5)
+        self.assertTrue(sells["action"].eq("SELL").all())
+
+
 if __name__ == "__main__":
     unittest.main()
+

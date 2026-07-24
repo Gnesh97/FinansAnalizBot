@@ -3915,7 +3915,7 @@ def _run_paper_signal_report(
     ledger_path,
     paper_strategy_mode="main",
     include_watchlist=False,
-    paper_max_new_positions_per_day=5,
+    paper_max_new_positions_per_day=30,
 ):
     run_datetime = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = []
@@ -7801,7 +7801,7 @@ def run_strategy_experiments(
     paper_report=False,
     paper_strategy="main",
     paper_include_watchlist=False,
-    paper_max_new_positions_per_day=5,
+    paper_max_new_positions_per_day=30,
     command=None,
     intraday_data_dir=None,
     daily_data_dir=None,

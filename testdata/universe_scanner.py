@@ -228,7 +228,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--paper-max-new-positions-per-day",
         type=int,
-        default=5,
+        default=30,
         help="Maximum actionable new BUY rows per day for ramp-in.",
     )
     parser.add_argument(
