@@ -2285,10 +2285,8 @@ def _run_tiingo_profile(args) -> None:
     provider = _tiingo_provider()
     if args.feed not in (None, "tiingo"):
         raise ValueError("V2_TIINGO_REQUIRES_FEED_TIINGO")
-    if args.refresh_daily or args.refresh_latest or args.only_aggregate_130min or args.skip_download:
+    if args.refresh_latest or args.only_aggregate_130min or args.skip_download:
         raise ValueError("V2_TIINGO_UNSUPPORTED_MODE_FLAG")
-    if args.dry_run == args.live:
-        raise ValueError("V2_TIINGO_REQUIRES_EXACTLY_ONE_OF_DRY_RUN_OR_LIVE")
     output_root = Path(args.output_root) if args.output_root else provider.DEFAULT_V2_TIINGO_FROZEN_ROOT
     kwargs = {}
     if args.pace_delay is not None:
@@ -2299,6 +2297,25 @@ def _run_tiingo_profile(args) -> None:
         if args.max_rate_limit_waits < 1:
             raise ValueError("V2_TIINGO_MAX_RATE_LIMIT_WAITS_MUST_BE_POSITIVE")
         kwargs["max_rate_limit_waits"] = args.max_rate_limit_waits
+    if args.refresh_daily:
+        # Refresh is always a live acquisition; plan/import flags reject fail-closed.
+        if args.dry_run or args.import_source_root:
+            raise ValueError("V2_TIINGO_REFRESH_FORBIDS_DRY_RUN_AND_IMPORT")
+        # Subset refresh never finalizes a manifest, so running it against the
+        # default production root would leave files newer than the validated
+        # manifest (loud downstream validation failure). Require an explicit,
+        # non-default root for subset verification runs.
+        if args.symbols and (args.output_root is None or Path(args.output_root).resolve() == provider.DEFAULT_V2_TIINGO_FROZEN_ROOT.resolve()):
+            raise ValueError("V2_TIINGO_SUBSET_REFRESH_REQUIRES_NON_DEFAULT_OUTPUT_ROOT")
+        result = provider.run_v2_tiingo_daily_refresh(
+            output_root,
+            symbols_subset=list(args.symbols) if args.symbols else None,
+            **kwargs,
+        )
+        print(f"rs_v2_tiingo refresh status: {result['status']} (end {result['refresh_end']}, {result['symbols_processed']} symbols, drift: {result['drift_detected_symbols'] or 'none'})", flush=True)
+        return
+    if args.dry_run == args.live:
+        raise ValueError("V2_TIINGO_REQUIRES_EXACTLY_ONE_OF_DRY_RUN_OR_LIVE")
     result = provider.run_v2_tiingo_acquisition(
         output_root,
         live=args.live,

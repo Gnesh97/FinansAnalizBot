@@ -358,11 +358,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data-profile",
-        choices=["rs_v2_sip", "rs_v2_clean"],
+        choices=["rs_v2_sip", "rs_v2_clean", "rs_v2_tiingo"],
         default="rs_v2_sip",
         help="Which validated dataset profile to read for all modes that use the "
              "default data folder. Default rs_v2_sip; rs_v2_clean selects the "
-             "IEX-feed dataset. Explicit opt-in only -- never silently repointed."
+             "IEX-feed dataset; rs_v2_tiingo selects the Tiingo daily-only "
+             "dataset. Explicit opt-in only -- never silently repointed."
     )
     args = parser.parse_args()
     parallel = bool(args.parallel and not args.no_parallel)

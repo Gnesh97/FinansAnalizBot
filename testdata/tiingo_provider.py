@@ -56,6 +56,8 @@ RATE_LIMIT_BACKOFF_BASE_SECONDS = 300
 DEFAULT_MAX_RATE_LIMIT_WAITS = 5
 IMPORT_ACTION = "IMPORTED_LOCAL_TIINGO_FETCH"
 DOWNLOAD_ACTION = "DOWNLOADED_IN_CURRENT_RUN"
+ADJUSTMENT_DRIFT_THRESHOLD = 0.005  # >0.5% relative OHLC difference on a common session
+DRIFT_CHECK_TRAILING_SESSIONS = 10
 
 
 def _vericekici():
@@ -211,6 +213,310 @@ def _fetch_symbol_paced(
                 attempts,
                 rate_limit_waits,
             )
+        except urllib.error.HTTPError as error:
+            if error.code != 429:
+                raise
+            rate_limit_waits += 1
+            if rate_limit_waits > max_rate_limit_waits:
+                raise RuntimeError(f"TIINGO_RATE_LIMIT_EXHAUSTED: {symbol} after {max_rate_limit_waits} waits") from error
+            wait_seconds = RATE_LIMIT_BACKOFF_BASE_SECONDS * rate_limit_waits
+            print(f"{symbol}: HTTP 429, waiting {wait_seconds}s for hourly quota reset ({rate_limit_waits}/{max_rate_limit_waits})", flush=True)
+            time.sleep(wait_seconds)
+
+
+def measure_adjustment_drift(existing: pd.DataFrame, refreshed: pd.DataFrame) -> dict:
+    """Max relative OHLC difference across sessions common to both frames.
+
+    Returns full telemetry -- the triggering percentage and before/after
+    values are always retrievable afterwards (fixes the SIP-era gap where the
+    drift magnitude could not be reconstructed post hoc).
+    """
+    result = {
+        "max_drift_ratio": 0.0,
+        "drift_session": "",
+        "drift_column": "",
+        "drift_value_existing": None,
+        "drift_value_refreshed": None,
+        "common_session_count": 0,
+    }
+    if existing.empty or refreshed.empty:
+        return result
+    existing_by_date = existing.set_index(pd.to_datetime(existing["Date"], utc=True).dt.strftime("%Y-%m-%d"))
+    refreshed_by_date = refreshed.set_index(pd.to_datetime(refreshed["Date"], utc=True).dt.strftime("%Y-%m-%d"))
+    common = sorted(set(existing_by_date.index) & set(refreshed_by_date.index))
+    result["common_session_count"] = len(common)
+    for session in common:
+        row_existing = existing_by_date.loc[session]
+        row_refreshed = refreshed_by_date.loc[session]
+        for column in ("Open", "High", "Low", "Close"):
+            value_existing = float(row_existing[column])
+            value_refreshed = float(row_refreshed[column])
+            if value_refreshed <= 0:
+                continue
+            ratio = abs(value_existing - value_refreshed) / value_refreshed
+            if ratio > result["max_drift_ratio"]:
+                result.update({
+                    "max_drift_ratio": ratio,
+                    "drift_session": session,
+                    "drift_column": column,
+                    "drift_value_existing": value_existing,
+                    "drift_value_refreshed": value_refreshed,
+                })
+    return result
+
+
+def is_adjustment_drift(drift: dict, threshold: float = ADJUSTMENT_DRIFT_THRESHOLD) -> bool:
+    return drift["max_drift_ratio"] > threshold
+
+
+def _merge_new_sessions(existing: pd.DataFrame, refreshed: pd.DataFrame) -> pd.DataFrame:
+    """Append refreshed rows for sessions strictly after the existing last session."""
+    existing_last = pd.to_datetime(existing["Date"], utc=True).max()
+    refreshed_dates = pd.to_datetime(refreshed["Date"], utc=True)
+    new_rows = refreshed.loc[refreshed_dates > existing_last]
+    if new_rows.empty:
+        return existing
+    return pd.concat([existing, new_rows], ignore_index=True)
+
+
+def _terminal_symbols(symbols: list[str], exceptions: list[dict], as_of_date: str) -> set[str]:
+    """Registry-driven EARLY_TERMINAL skip set -- no symbol literals here."""
+    coverage_module = _coverage_module()
+    terminated = set()
+    for symbol in symbols:
+        row = coverage_module._matching_exception(exceptions, symbol, "EARLY_TERMINAL")
+        if row is not None and str(row.get("approved_last_session", "")) <= as_of_date:
+            terminated.add(symbol)
+    return terminated
+
+
+def latest_completed_session(as_of: datetime | None = None) -> str:
+    """Most recent NYSE session per the approved calendar, matching the
+    freshness bar dss_report._latest_expected_session uses."""
+    coverage_module = _coverage_module()
+    today_text = (as_of or datetime.now(timezone.utc)).date().isoformat()
+    schedule = coverage_module.approved_nyse_schedule(V2_TIINGO_TARGET_START, today_text)
+    return schedule.index[-1].strftime("%Y-%m-%d")
+
+
+def run_v2_tiingo_daily_refresh(
+    output_root: Path,
+    *,
+    pace_delay_seconds: float = DEFAULT_PACE_DELAY_SECONDS,
+    max_rate_limit_waits: int = DEFAULT_MAX_RATE_LIMIT_WAITS,
+    symbols_subset: list[str] | None = None,
+    target_end: str | None = None,
+) -> dict:
+    """Paced, resumable daily refresh for rs_v2_tiingo.
+
+    Per symbol: one trailing-window request (last DRIFT_CHECK_TRAILING_SESSIONS
+    sessions through target_end) doubles as adjustment-drift probe AND source
+    of the new bars. Drift > threshold triggers a clean full-history
+    re-acquisition for that symbol (Tiingo retroactively re-adjusts history on
+    corporate actions -- spinoffs/splits/dividends legitimately fire this).
+    Registry-driven EARLY_TERMINAL symbols are skipped without a request.
+
+    symbols_subset: verification mode -- refreshes only those symbols and
+    NEVER finalizes a manifest (a partial refresh must not repoint the
+    dataset's validated state). Full refresh (no subset) finalizes fail-closed.
+    """
+    module = _vericekici()
+    coverage_module = _coverage_module()
+    output_root = Path(output_root)
+    candidates, baseline = module.load_v2_frozen_universe()
+    all_symbols = [*candidates, "QQQ", "SPY"]
+    refresh_end = target_end or latest_completed_session()
+    if refresh_end < V2_TIINGO_TARGET_END:
+        raise ValueError("V2_TIINGO_REFRESH_END_BEFORE_FROZEN_WINDOW")
+
+    exceptions = coverage_module.load_reviewed_coverage_exceptions(V2_TIINGO_COVERAGE_EXCEPTIONS_PATH)
+    terminal = _terminal_symbols(all_symbols, exceptions, refresh_end)
+    selected = [s for s in all_symbols if symbols_subset is None or s in set(symbols_subset)]
+    if not selected:
+        raise ValueError("V2_TIINGO_REFRESH_EMPTY_SYMBOL_SELECTION")
+
+    manifests_dir = output_root / "manifests"
+    manifests_dir.mkdir(parents=True, exist_ok=True)
+    state_path = manifests_dir / "tiingo_refresh_state.json"
+    state = _load_acquisition_state(state_path)
+    run_id = state["acquisition_run_id"]
+    api_key = get_tiingo_api_key()
+
+    provider_attempt_count = 0
+    retry_attempt_count = 0
+    refreshed_records = {}
+    timing = []
+    for symbol in selected:
+        destination = output_root / module.resolve_v2_dataset_paths(output_root, symbol).daily.relative_to(output_root)
+        symbol_started = time.time()
+        if symbol in terminal:
+            print(f"{symbol}: SKIPPED (registry EARLY_TERMINAL, no data can exist after approved_last_session)", flush=True)
+            refreshed_records[symbol] = {"provider_result_status": "SKIPPED", "adjustment_drift_detected": False}
+            state["symbols"][symbol] = {"status": "SKIPPED", "refresh_end": refresh_end}
+            _save_acquisition_state(state, state_path)
+            continue
+        state_entry = state["symbols"].get(symbol)
+        if (
+            state_entry is not None
+            and state_entry.get("refresh_end") == refresh_end
+            and destination.exists()
+            and module.verify_file_integrity(destination)["sha256"] == state_entry.get("sha256")
+        ):
+            print(f"{symbol}: resume, already refreshed in run {run_id}", flush=True)
+            refreshed_records[symbol] = {
+                "provider_result_status": state_entry.get("provider_result_status", "REFRESHED"),
+                "adjustment_drift_detected": state_entry.get("adjustment_drift_detected", False),
+                **{k: state_entry[k] for k in ("max_drift_pct", "drift_session", "drift_column") if k in state_entry},
+            }
+            continue
+        if not destination.exists():
+            raise ValueError(f"V2_TIINGO_REFRESH_MISSING_BASE_FILE: {symbol}")
+        existing = pd.read_csv(destination)
+        existing_sessions = pd.to_datetime(existing["Date"], utc=True).dt.strftime("%Y-%m-%d").tolist()
+        drift_check_start = existing_sessions[-DRIFT_CHECK_TRAILING_SESSIONS] if len(existing_sessions) >= DRIFT_CHECK_TRAILING_SESSIONS else existing_sessions[0]
+
+        window, attempts, _ = _fetch_window_paced(symbol, api_key, drift_check_start, refresh_end, pace_delay_seconds, max_rate_limit_waits)
+        provider_attempt_count += attempts
+        retry_attempt_count += attempts - 1
+        drift = measure_adjustment_drift(existing, window)
+        drift_detected = is_adjustment_drift(drift)
+        drift_pct = round(drift["max_drift_ratio"] * 100.0, 6)
+        if drift_detected:
+            print(
+                f"[ADJUSTMENT_DRIFT] {symbol}: max_drift={drift_pct}% on {drift['drift_session']} {drift['drift_column']} "
+                f"(existing={drift['drift_value_existing']} refreshed={drift['drift_value_refreshed']}) "
+                f"-- full history re-acquisition",
+                flush=True,
+            )
+            full, attempts_full, _ = _fetch_window_paced(symbol, api_key, V2_TIINGO_TARGET_START, refresh_end, pace_delay_seconds, max_rate_limit_waits)
+            provider_attempt_count += attempts_full
+            retry_attempt_count += attempts_full - 1
+            module.atomic_write_csv(full, destination)
+            status = "DOWNLOADED"
+        else:
+            merged = _merge_new_sessions(existing, window)
+            module.atomic_write_csv(merged, destination)
+            status = "REFRESHED"
+        integrity = module.verify_file_integrity(destination)
+        if integrity["data_status"] != "VALID":
+            raise ValueError(f"V2_TIINGO_REFRESH_FILE_INVALID: {symbol}: {integrity['error_type']}")
+        record = {
+            "provider_result_status": status,
+            "adjustment_drift_detected": drift_detected,
+            "max_drift_pct": drift_pct,
+            "drift_session": drift["drift_session"],
+            "drift_column": drift["drift_column"],
+            "drift_value_existing": drift["drift_value_existing"],
+            "drift_value_refreshed": drift["drift_value_refreshed"],
+        }
+        refreshed_records[symbol] = record
+        state["symbols"][symbol] = {**record, "sha256": integrity["sha256"], "refresh_end": refresh_end, "status": status}
+        _save_acquisition_state(state, state_path)
+        timing.append({"symbol": symbol, "seconds": round(time.time() - symbol_started, 2), "status": status})
+
+    summary = {
+        "acquisition_run_id": run_id,
+        "refresh_end": refresh_end,
+        "symbols_processed": len(selected),
+        "terminal_skipped": sorted(set(selected) & terminal),
+        "drift_detected_symbols": sorted(s for s, r in refreshed_records.items() if r.get("adjustment_drift_detected")),
+        "provider_attempt_count": provider_attempt_count,
+        "retry_attempt_count": retry_attempt_count,
+        "per_symbol_timing": timing,
+    }
+    if symbols_subset is not None:
+        print(f"PARTIAL_VERIFICATION_NO_FINALIZE: refreshed {len(selected)} symbol(s); manifest NOT finalized (subset refresh can never repoint validated state)", flush=True)
+        return {"status": "PARTIAL_VERIFICATION_NO_FINALIZE", **summary}
+
+    market_schedule = coverage_module.approved_nyse_schedule(V2_TIINGO_TARGET_START, refresh_end)
+    plan = module.build_v2_acquisition_plan(output_root, candidates, V2_TIINGO_TARGET_START, refresh_end, V2_TIINGO_FEED, V2_TIINGO_ADJUSTMENT, include_intraday=False)
+    records = []
+    for row in plan:
+        symbol = row["symbol"]
+        destination = output_root / row["output_relative_path"]
+        integrity = module.verify_file_integrity(destination)
+        coverage = coverage_module.calculate_v2_session_coverage(
+            pd.read_csv(destination), timeframe="1D", symbol=symbol,
+            target_start=V2_TIINGO_TARGET_START, target_end=refresh_end,
+            market_schedule=market_schedule, reviewed_exceptions=exceptions,
+        )
+        refresh_info = refreshed_records.get(symbol, {})
+        records.append({
+            **row, **integrity, **coverage,
+            "request_status": "SUCCESS",
+            "request_end_semantics": "INCLUSIVE",
+            "acquisition_run_id": run_id,
+            "acquisition_action": DOWNLOAD_ACTION,
+            "downloaded_in_current_run": refresh_info.get("provider_result_status") in {"DOWNLOADED", "REFRESHED"},
+            **refresh_info,
+        })
+    manifest = {
+        "dataset_schema_version": V2_TIINGO_DATASET_SCHEMA_VERSION,
+        "dataset_profile": V2_TIINGO_PROFILE,
+        "strategy_identifier": module.V2_STRATEGY_IDENTIFIER,
+        "acquisition_run_id": run_id,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "target_start_date": V2_TIINGO_TARGET_START,
+        "target_end_date": refresh_end,
+        "feed": V2_TIINGO_FEED,
+        "adjustment": V2_TIINGO_ADJUSTMENT,
+        "candidate_count": len(candidates),
+        "candidate_universe_hash": baseline["universe"]["candidate_universe_hash"],
+        "benchmark_symbols": ["QQQ", "SPY"],
+        "logical_acquisition_item_count": len(plan),
+        "successful_item_count": len(records),
+        "failed_item_count": len(plan) - len(records),
+        "refresh_daily": True,
+        "drift_detected_symbols": summary["drift_detected_symbols"],
+        "import_source_root": None,
+        "downloader_call_path": "testdata/tiingo_provider.py",
+        "downloader_source_commit": module._source_commit(),
+        "status": "VALIDATION_PENDING",
+        "retry_telemetry_status": "MEASURED",
+        "provider_attempt_count": provider_attempt_count,
+        "retry_attempt_count": retry_attempt_count,
+        "failed_provider_attempt_count": retry_attempt_count,
+        "files": records,
+    }
+    run_manifest_path = manifests_dir / run_id / "acquisition_manifest.json"
+    latest_manifest_path = manifests_dir / "latest_manifest.json"
+    report_summary = {
+        "acquisition_run_id": run_id,
+        "dataset_profile": V2_TIINGO_PROFILE,
+        "refresh_mode": "REFRESH_DAILY",
+        "symbol_count": len({row["symbol"] for row in plan}),
+        "requested_start": V2_TIINGO_TARGET_START,
+        "requested_end": refresh_end,
+    }
+    module.finalize_v2_with_report(
+        manifest, run_manifest_path, latest_manifest_path,
+        manifests_dir / run_id, BASE_DIR / "reports" / "latest",
+        report_summary, records, profile=V2_TIINGO_PROFILE,
+    )
+    state["status"] = "FINALIZED"
+    _save_acquisition_state(state, state_path)
+    return {"status": "COMPLETE_VALIDATED", **summary}
+
+
+def _fetch_window_paced(
+    symbol: str,
+    api_key: str,
+    start: str,
+    end: str,
+    pace_delay_seconds: float,
+    max_rate_limit_waits: int,
+) -> tuple[pd.DataFrame, int, int]:
+    """Paced window fetch with bounded 429 backoff; returns (frame, attempts, waits)."""
+    attempts = 0
+    rate_limit_waits = 0
+    while True:
+        attempts += 1
+        try:
+            frame = fetch_tiingo_daily_bars(symbol, api_key, start, end)
+            if frame.empty:
+                raise ValueError(f"TIINGO_EMPTY_RESPONSE: {symbol}")
+            time.sleep(pace_delay_seconds)
+            return frame, attempts, rate_limit_waits
         except urllib.error.HTTPError as error:
             if error.code != 429:
                 raise
@@ -391,12 +697,21 @@ def validate_v2_tiingo_manifest_and_files(dataset_root: Path, manifest: dict, fr
         "successful_item_count": V2_TIINGO_ITEM_COUNT,
         "failed_item_count": 0,
     }
-    if any(manifest.get(key) != value for key, value in exact.items()) or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
+    is_refresh = bool(manifest.get("refresh_daily"))
+    if is_refresh:
+        target_end_date = manifest.get("target_end_date")
+        target_end_valid = isinstance(target_end_date, str) and target_end_date >= V2_TIINGO_TARGET_END
+        other_keys_match = all(manifest.get(key) == value for key, value in exact.items() if key != "target_end_date")
+    else:
+        target_end_valid = manifest.get("target_end_date") == V2_TIINGO_TARGET_END
+        other_keys_match = all(manifest.get(key) == value for key, value in exact.items() if key != "target_end_date")
+    if not other_keys_match or not target_end_valid or not manifest.get("acquisition_run_id") or manifest.get("status") not in {"VALIDATION_PENDING", "COMPLETE_VALIDATED"}:
         raise ValueError("V2_DATASET_NOT_VALIDATED: frozen contract mismatch")
     module.validate_v2_retry_telemetry(manifest)
+    effective_end = manifest.get("target_end_date")
     expected = {
         (row["symbol"], row["timeframe"]): row
-        for row in module.build_v2_acquisition_plan(root, candidates, V2_TIINGO_TARGET_START, V2_TIINGO_TARGET_END, V2_TIINGO_FEED, V2_TIINGO_ADJUSTMENT, include_intraday=False)
+        for row in module.build_v2_acquisition_plan(root, candidates, V2_TIINGO_TARGET_START, effective_end, V2_TIINGO_FEED, V2_TIINGO_ADJUSTMENT, include_intraday=False)
     }
     actual = {}
     for record in manifest.get("files", []):
@@ -415,7 +730,7 @@ def validate_v2_tiingo_manifest_and_files(dataset_root: Path, manifest: dict, fr
             record.get("asset_role") != expected_record["asset_role"]
             or record.get("output_relative_path") != expected_record["output_relative_path"]
             or record.get("requested_start") != exact["target_start_date"]
-            or record.get("requested_end") != exact["target_end_date"]
+            or record.get("requested_end") != effective_end
             or record.get("feed") != V2_TIINGO_FEED
             or record.get("adjustment") != V2_TIINGO_ADJUSTMENT
             or record.get("acquisition_run_id") != manifest["acquisition_run_id"]
@@ -429,7 +744,10 @@ def validate_v2_tiingo_manifest_and_files(dataset_root: Path, manifest: dict, fr
             raise ValueError("V2_DATASET_NOT_VALIDATED: missing coverage metadata")
         action = record.get("acquisition_action")
         if action == DOWNLOAD_ACTION:
-            if record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
+            if is_refresh:
+                if record.get("provider_result_status") not in {"DOWNLOADED", "REFRESHED", "SKIPPED"}:
+                    raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
+            elif record.get("downloaded_in_current_run") is not True or record.get("provider_result_status") != "DOWNLOADED":
                 raise ValueError("V2_DATASET_NOT_VALIDATED: stale daily provenance")
         elif action == IMPORT_ACTION:
             source_relative = record.get("import_source_relative_path")
@@ -445,12 +763,12 @@ def validate_v2_tiingo_manifest_and_files(dataset_root: Path, manifest: dict, fr
                 raise ValueError("V2_DATASET_NOT_VALIDATED: import lineage invalid")
         else:
             raise ValueError("V2_DATASET_NOT_VALIDATED: unknown acquisition action")
-    market_schedule = coverage_module.approved_nyse_schedule(exact["target_start_date"], exact["target_end_date"])
+    market_schedule = coverage_module.approved_nyse_schedule(exact["target_start_date"], effective_end)
     for key in expected:
         record = actual[key]
         path = root / record["output_relative_path"]
         coverage_module.validate_v2_file_coverage(
-            path, record, record["symbol"], "1D", exact["target_start_date"], exact["target_end_date"],
+            path, record, record["symbol"], "1D", exact["target_start_date"], effective_end,
             reviewed_exceptions=exceptions, market_schedule=market_schedule,
         )
 

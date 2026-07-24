@@ -3982,6 +3982,13 @@ def _run_paper_signal_report(
 
 
 def _block_new_signal_generation_on_daily_mismatch(paper_report, daily_dir, intraday_dir):
+    # Daily-only dataset profiles (rs_v2_tiingo, and daily-only mode generally)
+    # ship no intraday directory at all, so this comparison has no second
+    # operand: an absent directory is the profile's shape, not a staleness
+    # signal. A present intraday directory is still compared -- including the
+    # empty/stale cases this guard exists to catch.
+    if not Path(intraday_dir).exists():
+        return paper_report
     latest_daily = _latest_csv_data_date(daily_dir)
     latest_130min = _latest_csv_data_date(intraday_dir)
     if latest_daily == latest_130min or paper_report is None or paper_report.empty:
@@ -7614,6 +7621,36 @@ def validate_v2_clean_dataset(data_folder):
     if latest.get("acquisition_run_id") != manifest.get("acquisition_run_id"):
         raise ValueError("V2_DATASET_NOT_VALIDATED: acquisition run id mismatch")
     profile = manifest.get("dataset_profile", "rs_v2_clean")
+    if profile == "rs_v2_tiingo":
+        try:
+            try:
+                from .tiingo_provider import V2_TIINGO_TARGET_END, validate_v2_tiingo_manifest_and_files
+            except ImportError:
+                from tiingo_provider import V2_TIINGO_TARGET_END, validate_v2_tiingo_manifest_and_files
+            validate_v2_tiingo_manifest_and_files(folder, manifest)
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"V2_DATASET_NOT_VALIDATED: shared manifest validator failed: {e}")
+        if manifest.get("strategy_identifier") != "rs_m126_top30_sma100_no_regime_v2_clean_stock":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: strategy identifier mismatch")
+        if manifest.get("target_start_date") != "2020-07-27":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: target start date mismatch")
+        if manifest.get("target_end_date", "") < V2_TIINGO_TARGET_END:
+            raise ValueError("V2_DATASET_NOT_VALIDATED: target end date too old")
+        if manifest.get("adjustment") != "adjusted":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: adjustment is not adjusted")
+        if manifest.get("feed") != "tiingo":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: feed is not tiingo")
+        if manifest.get("candidate_universe_hash") != "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: candidate universe hash mismatch")
+        if manifest.get("candidate_count") != 177:
+            raise ValueError("V2_DATASET_NOT_VALIDATED: candidate count mismatch")
+        if manifest.get("logical_acquisition_item_count") != 179:
+            raise ValueError("V2_DATASET_NOT_VALIDATED: expected 179 daily-only items")
+        if manifest.get("status") != "COMPLETE_VALIDATED":
+            raise ValueError("V2_DATASET_NOT_VALIDATED: manifest status is not COMPLETE_VALIDATED")
+        return
     if profile == "rs_v2_sip":
         try:
             try:

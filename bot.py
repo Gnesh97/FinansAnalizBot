@@ -195,10 +195,11 @@ def parse_args():
     )
     parser.add_argument(
         "--dss-data-profile",
-        choices=["rs_v2_sip", "rs_v2_clean"],
+        choices=["rs_v2_sip", "rs_v2_clean", "rs_v2_tiingo"],
         default="rs_v2_sip",
         help="dss-report mode only: which validated dataset profile to read. "
-             "Default rs_v2_sip; rs_v2_clean selects the IEX-feed dataset."
+             "Default rs_v2_sip; rs_v2_clean selects the IEX-feed dataset; "
+             "rs_v2_tiingo selects the Tiingo daily-only dataset."
     )
     return parser.parse_args()
 
