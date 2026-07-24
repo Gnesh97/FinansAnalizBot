@@ -615,6 +615,8 @@ def finalize_v2_manifest(manifest: dict, run_manifest_path: Path, latest_manifes
             raise ValueError("V2_IMMUTABLE_MANIFEST_COMMIT_FAILED")
         if profile == "rs_v2_sip":
             validate_v2_sip_manifest_and_files(latest_manifest_path.parents[1], committed)
+        elif profile == "rs_v2_tiingo":
+            _tiingo_provider().validate_v2_tiingo_manifest_and_files(latest_manifest_path.parents[1], committed)
         else:
             validate_v2_manifest_and_files(latest_manifest_path.parents[1], committed)
         committed = {**committed, "status": "COMPLETE_VALIDATED"}
@@ -624,6 +626,9 @@ def finalize_v2_manifest(manifest: dict, run_manifest_path: Path, latest_manifes
         if profile == "rs_v2_sip":
             validate_v2_sip_manifest_and_files(latest_manifest_path.parents[1], committed)
             freeze_v2_sip_baseline()
+        elif profile == "rs_v2_tiingo":
+            _tiingo_provider().validate_v2_tiingo_manifest_and_files(latest_manifest_path.parents[1], committed)
+            _tiingo_provider().freeze_v2_tiingo_baseline()
         else:
             validate_v2_manifest_and_files(latest_manifest_path.parents[1], committed)
     except Exception as exc:
@@ -640,6 +645,16 @@ def finalize_v2_manifest(manifest: dict, run_manifest_path: Path, latest_manifes
         raise
     pointer = {"acquisition_run_id": committed.get("acquisition_run_id"), "immutable_manifest_relative_path": run_manifest_path.relative_to(latest_manifest_path.parents[1]).as_posix(), "immutable_manifest_sha256": hashlib.sha256(run_manifest_path.read_bytes()).hexdigest()}
     _atomic_write_json(pointer, latest_manifest_path)
+
+
+def _tiingo_provider():
+    """Lazy import: keeps the Tiingo profile parallel to (not entangled with)
+    the Alpaca acquisition path and avoids a circular module import."""
+    try:
+        from . import tiingo_provider as module
+    except ImportError:
+        import tiingo_provider as module
+    return module
 
 
 def _source_commit() -> str | None:
@@ -2107,7 +2122,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", nargs="*", default=None)
     parser.add_argument("--symbols-file")
     parser.add_argument("--universe", choices=["all"], default=None)
-    parser.add_argument("--feed", choices=["iex", "sip"], default=None)
+    parser.add_argument("--feed", choices=["iex", "sip", "tiingo"], default=None)
     parser.add_argument("--adjustment", choices=["all", "raw", "split", "dividend"], default=None)
     parser.add_argument("--daily-start", default="2015-01-01")
     parser.add_argument("--intraday-start", default="2020-01-01")
@@ -2125,8 +2140,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-row-count-reduction", action="store_true")
 
     # V2 profile options
-    parser.add_argument("--dataset-profile", choices=["rs_v2_clean", "rs_v2_sip"], default=None)
+    parser.add_argument("--dataset-profile", choices=["rs_v2_clean", "rs_v2_sip", "rs_v2_tiingo"], default=None)
     parser.add_argument("--daily-only", action="store_true")
+    parser.add_argument("--import-source-root", default=None)
+    parser.add_argument("--pace-delay", type=float, default=None)
+    parser.add_argument("--max-rate-limit-waits", type=int, default=None)
     parser.add_argument("--start", default=None)
     parser.add_argument("--output-root", default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -2257,6 +2275,39 @@ def main() -> None:
         raise exc
 
 
+def _run_tiingo_profile(args) -> None:
+    """rs_v2_tiingo CLI entry: parallel to the Alpaca profiles, never mixed.
+
+    Modes: --dry-run (plan only), --live (paced Tiingo fetch, resumable),
+    --live --import-source-root <root> (no network; import already-fetched
+    local Tiingo CSVs). Daily-only; refresh flags are rejected fail-closed.
+    """
+    provider = _tiingo_provider()
+    if args.feed not in (None, "tiingo"):
+        raise ValueError("V2_TIINGO_REQUIRES_FEED_TIINGO")
+    if args.refresh_daily or args.refresh_latest or args.only_aggregate_130min or args.skip_download:
+        raise ValueError("V2_TIINGO_UNSUPPORTED_MODE_FLAG")
+    if args.dry_run == args.live:
+        raise ValueError("V2_TIINGO_REQUIRES_EXACTLY_ONE_OF_DRY_RUN_OR_LIVE")
+    output_root = Path(args.output_root) if args.output_root else provider.DEFAULT_V2_TIINGO_FROZEN_ROOT
+    kwargs = {}
+    if args.pace_delay is not None:
+        if args.pace_delay <= 0:
+            raise ValueError("V2_TIINGO_PACE_DELAY_MUST_BE_POSITIVE")
+        kwargs["pace_delay_seconds"] = args.pace_delay
+    if args.max_rate_limit_waits is not None:
+        if args.max_rate_limit_waits < 1:
+            raise ValueError("V2_TIINGO_MAX_RATE_LIMIT_WAITS_MUST_BE_POSITIVE")
+        kwargs["max_rate_limit_waits"] = args.max_rate_limit_waits
+    result = provider.run_v2_tiingo_acquisition(
+        output_root,
+        live=args.live,
+        import_source_root=Path(args.import_source_root) if args.import_source_root else None,
+        **kwargs,
+    )
+    print(f"rs_v2_tiingo status: {result['status']} ({result['logical_acquisition_item_count']} items)", flush=True)
+
+
 def _main_impl() -> None:
     ensure_project_venv()
     total_start = time.perf_counter()
@@ -2265,6 +2316,10 @@ def _main_impl() -> None:
     is_v2_clean = (args.dataset_profile == "rs_v2_clean")
     is_v2_sip = (args.dataset_profile == "rs_v2_sip")
     is_v2 = is_v2_clean or is_v2_sip
+
+    if args.dataset_profile == "rs_v2_tiingo":
+        _run_tiingo_profile(args)
+        return
 
     selected_recovery_modes = sum(
         bool(value)

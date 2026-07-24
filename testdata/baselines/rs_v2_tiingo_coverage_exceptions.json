@@ -1,0 +1,125 @@
+{
+  "exceptions": [
+    {
+      "approved_at": "2026-07-24",
+      "approved_by": "operator",
+      "approved_first_session": "2020-12-10",
+      "evidence_date": "2026-07-24",
+      "evidence_hash": "3da66f9623f12369b9c66a73425be3764b9570158ff94fd69e09e05838db551e",
+      "evidence_reports": [
+        "reports/audit/phase5d_tiingo_full_universe_20260722.md",
+        "reports/audit/phase6a_tiingo_integration_20260724.md"
+      ],
+      "evidence_source": "Tiingo daily EOD series first-session inspection (testdata/research_data/rs_v2_tiingo_eval_data/daily) cross-checked against public listing date; Phase 5D full-universe gap analysis (active-span aware) found zero internal gaps for this symbol.",
+      "exception_type": "LATE_START",
+      "reason": "Airbnb IPO listed 2020-12-10; no market data can exist before the listing date. Tiingo daily series first session matches the listing date exactly.",
+      "reviewed": true,
+      "symbol": "ABNB"
+    },
+    {
+      "approved_at": "2026-07-24",
+      "approved_by": "operator",
+      "approved_first_session": "2020-09-30",
+      "evidence_date": "2026-07-24",
+      "evidence_hash": "e464d130816d8763373ce282c77f6f656eb93e7286ef488e18516bfca792afae",
+      "evidence_reports": [
+        "reports/audit/phase5d_tiingo_full_universe_20260722.md",
+        "reports/audit/phase6a_tiingo_integration_20260724.md"
+      ],
+      "evidence_source": "Tiingo daily EOD series first-session inspection (testdata/research_data/rs_v2_tiingo_eval_data/daily) cross-checked against public listing date; Phase 5D full-universe gap analysis (active-span aware) found zero internal gaps for this symbol.",
+      "exception_type": "LATE_START",
+      "reason": "Palantir direct listing 2020-09-30; no market data can exist before the listing date. Tiingo daily series first session matches the listing date exactly.",
+      "reviewed": true,
+      "symbol": "PLTR"
+    },
+    {
+      "approved_at": "2026-07-24",
+      "approved_by": "operator",
+      "approved_first_session": "2021-03-10",
+      "evidence_date": "2026-07-24",
+      "evidence_hash": "ae4bc1391187c0e1fdb5122f69d0b9fbb037786a46219dead9f023a33dbdfb71",
+      "evidence_reports": [
+        "reports/audit/phase5d_tiingo_full_universe_20260722.md",
+        "reports/audit/phase6a_tiingo_integration_20260724.md"
+      ],
+      "evidence_source": "Tiingo daily EOD series first-session inspection (testdata/research_data/rs_v2_tiingo_eval_data/daily) cross-checked against public listing date; Phase 5D full-universe gap analysis (active-span aware) found zero internal gaps for this symbol.",
+      "exception_type": "LATE_START",
+      "reason": "Roblox direct listing 2021-03-10; no market data can exist before the listing date. Tiingo daily series first session matches the listing date exactly.",
+      "reviewed": true,
+      "symbol": "RBLX"
+    },
+    {
+      "approved_at": "2026-07-24",
+      "approved_by": "operator",
+      "approved_first_session": "2020-09-16",
+      "evidence_date": "2026-07-24",
+      "evidence_hash": "ad84ab33865d804f7aa4a995fd9778523555df38bb9d749770ec3098fb3fa0ad",
+      "evidence_reports": [
+        "reports/audit/phase5d_tiingo_full_universe_20260722.md",
+        "reports/audit/phase6a_tiingo_integration_20260724.md"
+      ],
+      "evidence_source": "Tiingo daily EOD series first-session inspection (testdata/research_data/rs_v2_tiingo_eval_data/daily) cross-checked against public listing date; Phase 5D full-universe gap analysis (active-span aware) found zero internal gaps for this symbol.",
+      "exception_type": "LATE_START",
+      "reason": "Snowflake IPO listed 2020-09-16; no market data can exist before the listing date. Tiingo daily series first session matches the listing date exactly.",
+      "reviewed": true,
+      "symbol": "SNOW"
+    },
+    {
+      "approved_at": "2026-07-24",
+      "approved_by": "operator",
+      "approved_last_session": "2025-08-07",
+      "evidence_date": "2026-07-24",
+      "evidence_hash": "2c6987a04dc5fcd3ac7c23a37875125df166fd62143bc57dfc2f45df9481e89e",
+      "evidence_reports": [
+        "reports/audit/phase5d_tiingo_full_universe_20260722.md",
+        "reports/audit/phase6a_tiingo_integration_20260724.md"
+      ],
+      "evidence_source": "Tiingo daily EOD series last-session inspection (testdata/research_data/rs_v2_tiingo_eval_data/daily/PARA_1D.csv, 1265 rows, final session 2025-08-07); Phase 5D dataset confirmation section 1.",
+      "exception_type": "EARLY_TERMINAL",
+      "reason": "Paramount Global ceased trading as PARA (Skydance merger close, ticker retired); Tiingo daily series ends 2025-08-07 with a complete final session. Matches the EARLY_TERMINAL treatment already approved for PARA on the rs_v2_sip profile.",
+      "reviewed": true,
+      "symbol": "PARA"
+    },
+    {
+      "affected_date": "2022-04-06",
+      "affected_symbols": [
+        "WBD"
+      ],
+      "approved_at": "2026-07-24",
+      "approved_by": "operator",
+      "evidence_hash": "8aa095a944d3c43fa05831afdc18a57c69acec28f64a4007885f9836680a77c0",
+      "evidence_reports": [
+        "reports/audit/phase5d_tiingo_full_universe_20260722.md",
+        "reports/audit/phase6a_tiingo_integration_20260724.md"
+      ],
+      "exception_type": "MISSING_INTERNAL_SESSION",
+      "rationale": "Phase 5D full-universe gap analysis (active-span aware, approved NYSE calendar) found WBD missing exactly two internal daily sessions, 2022-04-06 and 2022-04-07, inside the Discovery/WarnerMedia merger transition window (WBD regular-way trading began 2022-04-11 after a when-issued period). Alpaca SIP holds thin-volume data for both dates (63,434 and 272,978 shares), proving the market was open; Tiingo's consolidated series omits them. Tiingo-side provider gap, not a calendar or methodology artifact.",
+      "residual_impact_statement": "Neither date is a month-end rebalance signal date nor a next-open execution date. The Phase 5D full production backtest ran directly against this exact Tiingo data (gap included): zero of the 5 observed rebalance-selection differences involve WBD on or near these dates, and trade count delta vs SIP was -1 overall. affected_rebalance_decision_count = 0. Reported honestly, not softened: the gap is real but empirically immaterial to ranking decisions.",
+      "reviewed": true,
+      "timeframes_affected": [
+        "1D"
+      ]
+    },
+    {
+      "affected_date": "2022-04-07",
+      "affected_symbols": [
+        "WBD"
+      ],
+      "approved_at": "2026-07-24",
+      "approved_by": "operator",
+      "evidence_hash": "2575713abf5b6383debe396721661ad7def036a4e3b68aa034eb043b055e4a44",
+      "evidence_reports": [
+        "reports/audit/phase5d_tiingo_full_universe_20260722.md",
+        "reports/audit/phase6a_tiingo_integration_20260724.md"
+      ],
+      "exception_type": "MISSING_INTERNAL_SESSION",
+      "rationale": "Phase 5D full-universe gap analysis (active-span aware, approved NYSE calendar) found WBD missing exactly two internal daily sessions, 2022-04-06 and 2022-04-07, inside the Discovery/WarnerMedia merger transition window (WBD regular-way trading began 2022-04-11 after a when-issued period). Alpaca SIP holds thin-volume data for both dates (63,434 and 272,978 shares), proving the market was open; Tiingo's consolidated series omits them. Tiingo-side provider gap, not a calendar or methodology artifact.",
+      "residual_impact_statement": "Neither date is a month-end rebalance signal date nor a next-open execution date. The Phase 5D full production backtest ran directly against this exact Tiingo data (gap included): zero of the 5 observed rebalance-selection differences involve WBD on or near these dates, and trade count delta vs SIP was -1 overall. affected_rebalance_decision_count = 0. Reported honestly, not softened: the gap is real but empirically immaterial to ranking decisions.",
+      "reviewed": true,
+      "timeframes_affected": [
+        "1D"
+      ]
+    }
+  ],
+  "schema_version": "2.0.0"
+}
