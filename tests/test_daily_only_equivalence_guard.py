@@ -1,6 +1,10 @@
+import sys
 import unittest
 from pathlib import Path
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from baseline_guard_visibility import announce_if_inactive
 
 from testdata.runner import _load_or_build_prepared_cache, _default_params
 from testdata.baseline_parity import _baseline_experiment
@@ -10,6 +14,20 @@ from testdata.strategies.relative_strength_rotation import (
     _relative_strength_selection,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SIP_DATA_FOLDER = PROJECT_ROOT / "testdata" / "research_data" / "rs_v2_sip_market_data"
+
+# Phase 7C: research_data/ is gitignored, so this guard silently skipped in any
+# environment lacking the SIP dataset. Same treatment as the Tiingo guard.
+SIP_GUARD_ACTIVE = announce_if_inactive(
+    "rs_v2_sip_daily_only_equivalence",
+    SIP_DATA_FOLDER.exists(),
+    reason=f"missing {SIP_DATA_FOLDER.relative_to(PROJECT_ROOT)}",
+    restore_hint="restore the frozen rs_v2_sip dataset (historical control, not the governing baseline)",
+)
+
+
+@unittest.skipUnless(SIP_GUARD_ACTIVE, "SIP dataset folder not present in test environment.")
 class DailyOnlyEquivalenceGuardTest(unittest.TestCase):
     """HISTORICAL guard for the Phase 5A daily-only conversion, on frozen SIP data.
 
@@ -31,11 +49,7 @@ class DailyOnlyEquivalenceGuardTest(unittest.TestCase):
     """
 
     def test_daily_only_pipeline_produces_exact_frozen_baseline(self):
-        project_root = Path(__file__).resolve().parents[1]
-        data_folder = project_root / "testdata" / "research_data" / "rs_v2_sip_market_data"
-        if not data_folder.exists():
-            self.skipTest("SIP dataset folder not present in test environment.")
-            
+        data_folder = SIP_DATA_FOLDER
         intraday_dir = data_folder / "bars_130min"
         daily_dir = data_folder / "daily"
         

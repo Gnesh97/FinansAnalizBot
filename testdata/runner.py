@@ -2551,6 +2551,16 @@ def _rs_robustness_experiments():
 
 
 def _oos_walkforward_periods():
+    """OOS walk-forward windows as (name, start, end).
+
+    The bare "YYYY-MM-DD" end bound is INCLUSIVE of that session here, because
+    every frame reaching _slice_frame is America/New_York-indexed (see
+    data_engine._to_new_york_index) and a daily bar therefore sits at exactly
+    00:00 NY -- equal to the bound, kept by `<=`. Phase 7C measured all five
+    periods both ways and the row counts are identical. Do not "fix" this
+    without re-measuring; see tests/test_slice_frame_end_bound_invariant.py,
+    which pins the invariant this relies on.
+    """
     return [
         ("split_2020_2022", "2020-07-27", "2022-12-31"),
         ("split_2023_2024", "2023-01-01", "2024-12-31"),

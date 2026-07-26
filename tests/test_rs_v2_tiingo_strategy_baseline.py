@@ -34,7 +34,19 @@ DATA_FOLDER = PROJECT_ROOT / "testdata" / "research_data" / "rs_v2_tiingo_market
 BASELINE_PATH = PROJECT_ROOT / "testdata" / "baselines" / "rs_v2_tiingo_strategy_baseline.json"
 
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_tiingo_strategy_baseline import selection_fingerprint  # noqa: E402
+from baseline_guard_visibility import announce_if_inactive  # noqa: E402
+
+# Phase 7C: this dataset is gitignored, so absent it every assertion below is
+# skipped and the suite still prints OK. Announce that loudly instead of letting
+# a green run imply the governing baseline was verified.
+GUARD_ACTIVE = announce_if_inactive(
+    "rs_v2_tiingo_strategy_baseline",
+    DATA_FOLDER.exists() and BASELINE_PATH.exists(),
+    reason=f"missing {DATA_FOLDER.relative_to(PROJECT_ROOT)} or {BASELINE_PATH.relative_to(PROJECT_ROOT)}",
+    restore_hint="acquire the rs_v2_tiingo dataset, then rerun scripts/build_tiingo_strategy_baseline.py",
+)
 
 
 def _load_context():
@@ -52,7 +64,7 @@ def _load_context():
     return baseline, prepared, strategy_params, symbols
 
 
-@unittest.skipUnless(DATA_FOLDER.exists() and BASELINE_PATH.exists(),
+@unittest.skipUnless(GUARD_ACTIVE,
                      "rs_v2_tiingo dataset or frozen strategy baseline not present")
 class TiingoStrategyBaselineGuardTest(unittest.TestCase):
     @classmethod

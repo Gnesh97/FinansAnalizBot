@@ -77,6 +77,21 @@ def _tests_ran_count(output: str) -> int:
     return int(match.group(1)) if match else 0
 
 
+def _inactive_baseline_guards(output: str) -> list[str]:
+    """Guards that announced themselves inactive (see tests/baseline_guard_visibility.py).
+
+    A skipped baseline guard still yields a green suite, so it is surfaced here
+    and in the run report rather than being left to a bare "OK (skipped=N)".
+    """
+    marker = "[BASELINE-GUARD-INACTIVE]"
+    names = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(marker):
+            names.append(stripped[len(marker):].strip().removeprefix("guard=").strip())
+    return sorted(set(names))
+
+
 def _failed_tests(output: str) -> list[str]:
     failures = []
     for line in output.splitlines():
@@ -86,14 +101,23 @@ def _failed_tests(output: str) -> list[str]:
     return failures
 
 
-def _write_report(status: str, command: str, duration: float, tests_ran: int, failures: list[str]) -> None:
+def _write_report(
+    status: str,
+    command: str,
+    duration: float,
+    tests_ran: int,
+    failures: list[str],
+    inactive_guards: list[str] | None = None,
+) -> None:
     LATEST_DIR.mkdir(parents=True, exist_ok=True)
+    inactive_guards = inactive_guards or []
     lines = [
         "# Test Run Report",
         "",
         f"- run datetime: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"- status: {status}",
         f"- tests ran count: {tests_ran}",
+        f"- inactive baseline guards: {len(inactive_guards)}",
         f"- command: `{command}`",
         f"- duration_sec: {duration:.4f}",
         "- safety note: Unit tests only; no broker POST, no submit_order, no live trading.",
@@ -105,6 +129,14 @@ def _write_report(status: str, command: str, duration: float, tests_ran: int, fa
         lines.extend(f"- {item}" for item in failures)
     else:
         lines.append("- none")
+    lines.extend(["", "## Inactive Baseline Guards", ""])
+    if inactive_guards:
+        lines.append("These regression guards did NOT run. A green status above does not")
+        lines.append("mean their frozen baselines were verified.")
+        lines.append("")
+        lines.extend(f"- {name}" for name in inactive_guards)
+    else:
+        lines.append("- none (all baseline guards active)")
     lines.append("")
     (LATEST_DIR / "test_run_report.md").write_text("\n".join(lines), encoding="utf-8")
 
@@ -119,13 +151,25 @@ def main() -> int:
         test_code, test_output = _run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"])
     combined = compile_output + test_output
     status = "OK" if compile_code == 0 and test_code == 0 else "FAIL"
+    inactive_guards = _inactive_baseline_guards(combined)
     _write_report(
         status,
         command_text,
         time.perf_counter() - started,
         _tests_ran_count(combined),
         _failed_tests(combined),
+        inactive_guards,
     )
+    # Printed after the unittest summary so it is the last thing on screen: a
+    # green "OK" with skipped baseline guards must not read as a verified run.
+    if inactive_guards:
+        print(
+            f"\nSUITE SUMMARY: {len(inactive_guards)} baseline guard(s) INACTIVE and "
+            f"NOT verified by this run: {', '.join(inactive_guards)}",
+            flush=True,
+        )
+    else:
+        print("\nSUITE SUMMARY: 0 baseline guards inactive; all frozen baselines verified.", flush=True)
     return 0 if status == "OK" else (compile_code or test_code or 1)
 
 
