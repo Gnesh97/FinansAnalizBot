@@ -41,10 +41,15 @@ from baseline_guard_visibility import announce_if_inactive  # noqa: E402
 # Phase 7C: this dataset is gitignored, so absent it every assertion below is
 # skipped and the suite still prints OK. Announce that loudly instead of letting
 # a green run imply the governing baseline was verified.
+_MISSING = [
+    str(path.relative_to(PROJECT_ROOT))
+    for path in (DATA_FOLDER, BASELINE_PATH)
+    if not path.exists()
+]
 GUARD_ACTIVE = announce_if_inactive(
     "rs_v2_tiingo_strategy_baseline",
-    DATA_FOLDER.exists() and BASELINE_PATH.exists(),
-    reason=f"missing {DATA_FOLDER.relative_to(PROJECT_ROOT)} or {BASELINE_PATH.relative_to(PROJECT_ROOT)}",
+    not _MISSING,
+    reason=f"missing {', '.join(_MISSING)}" if _MISSING else "",
     restore_hint="acquire the rs_v2_tiingo dataset, then rerun scripts/build_tiingo_strategy_baseline.py",
 )
 
