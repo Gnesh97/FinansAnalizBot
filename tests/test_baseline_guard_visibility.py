@@ -97,5 +97,34 @@ class SuiteSummaryTest(unittest.TestCase):
         self.assertIn("- none (all baseline guards active)", content)
 
 
+class GuardWiringTest(unittest.TestCase):
+    """Protect the wiring itself.
+
+    Without this, deleting the announce_if_inactive call from a guard module
+    would silently restore the original invisible skip -- the exact failure
+    Phase 7C set out to remove -- and every test here would still pass.
+    """
+
+    GUARD_MODULES = {
+        "test_rs_v2_tiingo_strategy_baseline.py": "GUARD_ACTIVE",
+        "test_daily_only_equivalence_guard.py": "SIP_GUARD_ACTIVE",
+    }
+
+    def test_every_baseline_guard_announces_when_inactive(self):
+        for filename, constant in self.GUARD_MODULES.items():
+            with self.subTest(module=filename):
+                source = (Path(__file__).resolve().parent / filename).read_text(encoding="utf-8")
+                self.assertIn(
+                    "announce_if_inactive(", source,
+                    f"{filename} no longer announces an inactive guard; a missing dataset "
+                    f"would skip silently and the suite would still print OK",
+                )
+                self.assertIn(
+                    f"skipUnless({constant}", source,
+                    f"{filename} no longer gates its skip on {constant}, so the announcement "
+                    f"and the skip can disagree",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
