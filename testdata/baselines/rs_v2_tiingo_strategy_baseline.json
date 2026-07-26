@@ -1,0 +1,31 @@
+{
+  "baseline_schema_version": "1.0.0",
+  "dataset_profile": "rs_v2_tiingo",
+  "generated_at": "2026-07-26T10:23:28.748473Z",
+  "metrics": {
+    "cagr_pct": 18.46,
+    "max_drawdown_pct": -18.97,
+    "net_return_pct": 175.49,
+    "sharpe_ratio": 0.53,
+    "trade_count": 770,
+    "win_rate_pct": 50.1
+  },
+  "selection": {
+    "fingerprint_sha256": "ba697e9653db37bdf348af1abc50de3366fe2cfbd26a271498cb31359fcada73",
+    "first_rebalance_date": "2021-01-29",
+    "last_rebalance_date": "2026-07-21",
+    "rebalance_date_count": 67,
+    "top_n": 30
+  },
+  "status": "FROZEN",
+  "strategy_identifier": "rs_m126_top30_sma100_no_regime",
+  "universe": {
+    "candidate_count": 177,
+    "candidate_universe_hash": "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933"
+  },
+  "window": {
+    "slice_upper_bound": "2026-07-21 23:59:59",
+    "target_end_session": "2026-07-21",
+    "target_start": "2020-07-27"
+  }
+}
