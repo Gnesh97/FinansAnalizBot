@@ -114,13 +114,15 @@ class GuardWiringTest(unittest.TestCase):
         for filename, constant in self.GUARD_MODULES.items():
             with self.subTest(module=filename):
                 source = (Path(__file__).resolve().parent / filename).read_text(encoding="utf-8")
-                self.assertIn(
-                    "announce_if_inactive(", source,
+                # assertTrue, not assertIn: assertIn dumps the whole module into
+                # the failure output and buries the message.
+                self.assertTrue(
+                    "announce_if_inactive(" in source,
                     f"{filename} no longer announces an inactive guard; a missing dataset "
                     f"would skip silently and the suite would still print OK",
                 )
-                self.assertIn(
-                    f"skipUnless({constant}", source,
+                self.assertTrue(
+                    f"skipUnless({constant}" in source,
                     f"{filename} no longer gates its skip on {constant}, so the announcement "
                     f"and the skip can disagree",
                 )
