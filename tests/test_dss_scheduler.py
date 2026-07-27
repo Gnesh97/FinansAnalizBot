@@ -17,7 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "testdata"))
 from testdata import dss_scheduler
 
 SATURDAY = datetime(2026, 7, 25, 20, 30, tzinfo=timezone.utc)
-FRIDAY = datetime(2026, 7, 24, 20, 30, tzinfo=timezone.utc)
+# 22:00 UTC == 01:00 Europe/Istanbul, the installed timer's actual fire time and
+# two hours after the 20:00 UTC close. Phase 8B moved this off 20:30 UTC: with
+# the publication-lag gate a 20:30 UTC run is 30 minutes BEFORE that session is
+# publishable, so it now defers rather than running.
+FRIDAY = datetime(2026, 7, 24, 22, 0, tzinfo=timezone.utc)
 
 
 class TestTradingDayGate(unittest.TestCase):
@@ -183,6 +187,231 @@ class TestStatePersistence(unittest.TestCase):
             state_path.write_text("{not json", encoding="utf-8")
             self.assertEqual(dss_scheduler.load_state(state_path), {})
             self.assertFalse(dss_scheduler.already_reported("2026-07-24", state_path))
+
+
+class TestSessionCompletionGate(unittest.TestCase):
+    """Phase 8B: never target a session that has not closed and published.
+
+    Monday 2026-07-27 closes 16:00 ET = 20:00 UTC; with the 90-minute default
+    lag it becomes publishable at 21:30 UTC.
+    """
+
+    def test_normal_0100_istanbul_run_targets_the_session_that_just_closed(self):
+        # 01:00 Tue Europe/Istanbul == 22:00 UTC Mon, after close + lag.
+        as_of = datetime(2026, 7, 27, 22, 0, tzinfo=timezone.utc)
+        gate = dss_scheduler.session_completion_gate(as_of)
+        self.assertEqual(gate["expected_session"], "2026-07-27")
+        self.assertEqual(gate["published_session"], "2026-07-27")
+        self.assertTrue(gate["ready"])
+
+    def test_midday_catchup_run_is_not_ready(self):
+        # The actual 2026-07-27 14:24 Europe/Istanbul catch-up == 11:24 UTC.
+        as_of = datetime(2026, 7, 27, 11, 24, tzinfo=timezone.utc)
+        gate = dss_scheduler.session_completion_gate(as_of)
+        self.assertEqual(gate["expected_session"], "2026-07-27")
+        self.assertEqual(gate["published_session"], "2026-07-24")
+        self.assertFalse(gate["ready"])
+
+    def test_publication_lag_boundary_flips_exactly_at_close_plus_lag(self):
+        just_before = datetime(2026, 7, 27, 21, 29, tzinfo=timezone.utc)
+        just_after = datetime(2026, 7, 27, 21, 30, tzinfo=timezone.utc)
+        self.assertEqual(dss_scheduler.latest_published_session(just_before), "2026-07-24")
+        self.assertEqual(dss_scheduler.latest_published_session(just_after), "2026-07-27")
+
+    def test_weekend_resolves_to_the_last_weekday_session(self):
+        as_of = datetime(2026, 7, 25, 20, 30, tzinfo=timezone.utc)  # Saturday
+        self.assertEqual(dss_scheduler.latest_published_session(as_of), "2026-07-24")
+
+    def test_holiday_resolves_to_the_session_before_it(self):
+        # 2026-01-01 is a market holiday; the prior session is 2025-12-31.
+        as_of = datetime(2026, 1, 1, 22, 0, tzinfo=timezone.utc)
+        self.assertEqual(dss_scheduler.latest_published_session(as_of), "2025-12-31")
+
+    def test_chain_defers_on_uncompleted_session_without_running_steps(self):
+        as_of = datetime(2026, 7, 27, 11, 24, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "scheduler_state.json"
+            with patch.object(dss_scheduler, "_run_step") as run_step:
+                result = dss_scheduler.run_daily_chain(as_of=as_of, state_path=state_path, send=False)
+            self.assertEqual(result["status"], "DEFERRED_SESSION_NOT_COMPLETE")
+            self.assertEqual(result["published_session"], "2026-07-24")
+            run_step.assert_not_called()
+            # Deferral must not clobber the record of the last real outcome.
+            self.assertFalse(state_path.exists())
+
+    def test_force_bypasses_the_gate_without_consulting_it(self):
+        # latest_published_session fails closed on an empty window; --force must
+        # not inherit that failure mode.
+        as_of = datetime(2026, 7, 27, 11, 24, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            with patch.object(dss_scheduler, "latest_published_session",
+                              side_effect=AssertionError("must not be consulted under --force")) as published:
+                with patch.object(dss_scheduler, "_run_step",
+                                  return_value={"name": "refresh", "ok": True, "elapsed_sec": 0.1}):
+                    result = dss_scheduler.run_daily_chain(
+                        as_of=as_of, state_path=Path(temp) / "s.json",
+                        pending_notice_path=Path(temp) / "p.json", force=True, send=False,
+                    )
+            published.assert_not_called()
+        self.assertEqual(result["status"], "SENT")
+
+    def test_deferral_is_a_success_exit_code(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with patch.object(dss_scheduler, "run_daily_chain") as chain:
+                chain.return_value = {"status": "DEFERRED_SESSION_NOT_COMPLETE",
+                                      "target_session": "2026-07-27"}
+                code = dss_scheduler.main(["--state-path", str(Path(temp) / "s.json")])
+        self.assertEqual(code, 0)
+
+
+class TestNetworkUnavailablePath(unittest.TestCase):
+    """Phase 8B: the launcher aborts before the chain when there is no network."""
+
+    def test_queue_network_abort_persists_a_notice_and_exits_zero(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending_notices.json"
+            code = dss_scheduler.main([
+                "--queue-network-abort", "cannot resolve api.tiingo.com after 900s",
+                "--pending-notice-path", str(pending),
+            ])
+            self.assertEqual(code, 0)
+            queued = dss_scheduler.load_pending_notices(pending)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["reason"], "network_unavailable_at_launch")
+        self.assertIn(dss_scheduler.DSS_FAILURE_MARKER, queued[0]["text"])
+        self.assertIn("no network connectivity", queued[0]["text"])
+
+    def test_queue_network_abort_does_not_run_the_chain(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with patch.object(dss_scheduler, "run_daily_chain") as chain:
+                dss_scheduler.main([
+                    "--queue-network-abort", "no dns",
+                    "--pending-notice-path", str(Path(temp) / "pending.json"),
+                ])
+            chain.assert_not_called()
+
+
+class TestUndeliveredNoticeQueueing(unittest.TestCase):
+    """Phase 8B: a notice that cannot be sent is retried, then queued, never lost."""
+
+    def setUp(self):
+        patcher = patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        env_patcher = patch.object(dss_scheduler, "_load_project_env", lambda: None)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
+    def test_failed_send_is_retried_then_queued(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            with patch.object(dss_scheduler, "_post_telegram",
+                              side_effect=OSError("Name or service not known")) as post:
+                result = dss_scheduler.send_failure_notice(
+                    "refresh step exited 1", session="2026-07-24",
+                    attempts=3, retry_sleep_seconds=0, queue_path=pending, sleep=lambda _: None,
+                )
+            self.assertEqual(post.call_count, 3)
+            self.assertFalse(result["sent"])
+            self.assertTrue(result["queued"])
+            queued = dss_scheduler.load_pending_notices(pending)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["session"], "2026-07-24")
+
+    def test_send_that_succeeds_on_retry_is_not_queued(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            with patch.object(dss_scheduler, "_post_telegram",
+                              side_effect=[OSError("transient"), None]) as post:
+                result = dss_scheduler.send_failure_notice(
+                    "refresh step exited 1", attempts=3, retry_sleep_seconds=0,
+                    queue_path=pending, sleep=lambda _: None,
+                )
+            self.assertEqual(post.call_count, 2)
+            self.assertTrue(result["sent"])
+            self.assertFalse(result["queued"])
+            self.assertEqual(dss_scheduler.load_pending_notices(pending), [])
+
+    def test_queued_notice_is_delivered_late_and_marked_as_such(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            dss_scheduler.queue_notice("DSS did not run: refresh step exited 1",
+                                       reason="dns", session="2026-07-24", path=pending)
+            with patch.object(dss_scheduler, "_post_telegram") as post:
+                drained = dss_scheduler.drain_pending_notices(pending)
+            self.assertEqual(drained["delivered"], 1)
+            self.assertEqual(drained["remaining"], 0)
+            sent_text = post.call_args[0][0]
+            self.assertIn(dss_scheduler.LATE_NOTICE_MARKER, sent_text)
+            self.assertIn("2026-07-24", sent_text)
+            self.assertEqual(dss_scheduler.load_pending_notices(pending), [])
+
+    def test_queued_notice_survives_a_failed_drain_and_counts_attempts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            dss_scheduler.queue_notice("DSS did not run: x", reason="dns",
+                                       session="2026-07-24", path=pending)
+            with patch.object(dss_scheduler, "_post_telegram", side_effect=OSError("still down")):
+                drained = dss_scheduler.drain_pending_notices(pending)
+            self.assertEqual(drained["delivered"], 0)
+            self.assertEqual(drained["remaining"], 1)
+            self.assertEqual(dss_scheduler.load_pending_notices(pending)[0]["attempts"], 1)
+
+    def test_queued_notice_is_dropped_after_the_attempt_ceiling(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            dss_scheduler.queue_notice("DSS did not run: x", reason="dns",
+                                       session="2026-07-24", path=pending)
+            notices = dss_scheduler.load_pending_notices(pending)
+            notices[0]["attempts"] = dss_scheduler.MAX_QUEUED_NOTICE_ATTEMPTS - 1
+            dss_scheduler.save_pending_notices(notices, pending)
+            with patch.object(dss_scheduler, "_post_telegram", side_effect=OSError("still down")):
+                drained = dss_scheduler.drain_pending_notices(pending)
+            self.assertEqual(drained["dropped"], 1)
+            self.assertEqual(dss_scheduler.load_pending_notices(pending), [])
+
+    def test_realistic_token_is_redacted_from_log_text(self):
+        token = "123456789:AAEyBcDeFgHiJkLmNoPqRsTuVwXyZ0123456"
+        with patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": token}):
+            redacted = dss_scheduler._redact(f"failed calling https://api.telegram.org/bot{token}/sendMessage")
+        self.assertNotIn(token, redacted)
+        self.assertIn("<redacted>", redacted)
+
+    def test_short_token_does_not_shred_the_error_text(self):
+        # Guards the diagnostic: a 1-char token must not turn
+        # "Name or service not known" into "Name or service no<redacted> known".
+        with patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "t"}):
+            self.assertEqual(dss_scheduler._redact("Name or service not known"),
+                             "Name or service not known")
+
+    def test_deferred_run_still_delivers_a_queued_notice(self):
+        # The 2026-07-27 case: machine boots mid-day, network returns, the run
+        # defers -- but the operator must still hear about the earlier failure
+        # rather than waiting another day.
+        as_of = datetime(2026, 7, 27, 11, 24, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            dss_scheduler.queue_notice("DSS did not run: refresh step exited 1",
+                                       reason="dns", session="2026-07-24", path=pending)
+            with patch.object(dss_scheduler, "_post_telegram") as post:
+                with patch.object(dss_scheduler, "_run_step") as run_step:
+                    result = dss_scheduler.run_daily_chain(
+                        as_of=as_of, state_path=Path(temp) / "s.json",
+                        pending_notice_path=pending, send=True,
+                    )
+            self.assertEqual(result["status"], "DEFERRED_SESSION_NOT_COMPLETE")
+            run_step.assert_not_called()
+            post.assert_called_once()
+            self.assertIn(dss_scheduler.LATE_NOTICE_MARKER, post.call_args[0][0])
+            self.assertEqual(dss_scheduler.load_pending_notices(pending), [])
+
+    def test_drain_is_a_noop_when_nothing_is_queued(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            with patch.object(dss_scheduler, "_post_telegram") as post:
+                drained = dss_scheduler.drain_pending_notices(pending)
+            post.assert_not_called()
+            self.assertEqual(drained, {"delivered": 0, "remaining": 0, "dropped": 0})
 
 
 if __name__ == "__main__":
