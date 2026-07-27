@@ -1,0 +1,665 @@
+{
+  "baseline_reproduction": {
+    "net_return_pct": 175.49,
+    "trade_count": 770,
+    "cagr_pct": 18.46,
+    "max_drawdown_pct": -18.97,
+    "sharpe_ratio": 0.53,
+    "win_rate_pct": 50.1,
+    "fingerprint_sha256": "ba697e9653db37bdf348af1abc50de3366fe2cfbd26a271498cb31359fcada73",
+    "expected_net_return_pct": 175.49,
+    "expected_trade_count": 770,
+    "expected_fingerprint": "ba697e9653db37bdf348af1abc50de3366fe2cfbd26a271498cb31359fcada73",
+    "symbol_count": 177,
+    "matches_baseline": true
+  },
+  "measurement_1_risk": {
+    "annualized_volatility_pct": 19.13,
+    "daily_volatility_pct": 1.2049,
+    "sharpe_reported_by_system": 0.53,
+    "sharpe_recomputed_unrounded": 0.5342,
+    "sharpe_risk_free_assumption": "none -- raw mean daily return / daily std * sqrt(252)",
+    "max_drawdown_pct": -18.97,
+    "drawdown_episode_count": 88,
+    "top_5_drawdowns": [
+      {
+        "peak_date": "2025-02-19",
+        "trough_date": "2025-04-08",
+        "end_date": "2025-08-06",
+        "depth_pct": -18.97,
+        "peak_to_trough_days": 47,
+        "total_duration_days": 167,
+        "recovered": true
+      },
+      {
+        "peak_date": "2022-04-21",
+        "trough_date": "2022-10-14",
+        "end_date": "2023-06-14",
+        "depth_pct": -18.12,
+        "peak_to_trough_days": 176,
+        "total_duration_days": 419,
+        "recovered": true
+      },
+      {
+        "peak_date": "2021-11-22",
+        "trough_date": "2022-01-27",
+        "end_date": "2022-04-20",
+        "depth_pct": -16.41,
+        "peak_to_trough_days": 66,
+        "total_duration_days": 148,
+        "recovered": true
+      },
+      {
+        "peak_date": "2026-06-23",
+        "trough_date": "2026-07-20",
+        "end_date": "2026-07-21",
+        "depth_pct": -15.4,
+        "peak_to_trough_days": 27,
+        "total_duration_days": 28,
+        "recovered": false
+      },
+      {
+        "peak_date": "2023-08-01",
+        "trough_date": "2023-10-27",
+        "end_date": "2023-12-26",
+        "depth_pct": -13.32,
+        "peak_to_trough_days": 87,
+        "total_duration_days": 147,
+        "recovered": true
+      }
+    ],
+    "observation_days_system_method": 1175,
+    "trading_day_annualized_volatility_pct": 18.89,
+    "trading_day_sharpe": 0.9952,
+    "trading_day_observations": 1502,
+    "observations_dropped_by_calendar_resample": 327,
+    "annualized_arithmetic_mean_return_pct": 18.79,
+    "cagr_pct": 18.46
+  },
+  "measurement_2_exposure": {
+    "reconstruction_mismatches_vs_production": 1,
+    "reconstruction_mismatch_dates": [
+      "2026-07-21"
+    ],
+    "warmup_end_date": "2021-02-01",
+    "live_period": "2021-02-01 .. 2026-07-20",
+    "live_deployed_pct_min": 86.66,
+    "live_deployed_pct_p05": 99.64,
+    "live_deployed_pct_median": 100.0,
+    "live_deployed_pct_mean": 99.78,
+    "live_days_total": 1372,
+    "live_days_below_95pct_deployed": 21,
+    "live_days_below_50pct_deployed": 0,
+    "live_days_fully_in_cash": 0,
+    "live_positions_min": 25,
+    "live_positions_median": 29.0,
+    "production_avg_positions_held": 26.45,
+    "production_max_positions_held": 30,
+    "production_max_portfolio_heat_pct": 100.0,
+    "reconstructed_mean_positions": 26.43,
+    "uses_market_regime_filter": false,
+    "rs_top_n": 30,
+    "rs_trend_sma_days": 100,
+    "rebalance_count": 73,
+    "rebalances_below_full_allocation": 7,
+    "min_selected_count": 0,
+    "deployed_pct_min": 0.0,
+    "deployed_pct_median": 100.0,
+    "deployed_pct_max": 100.0,
+    "rebalance_series": [
+      {
+        "date": "2020-07-31",
+        "selected_count": 0,
+        "positions_held": 0,
+        "deployed_pct": 0.0,
+        "eligible_universe_count": 0
+      },
+      {
+        "date": "2020-08-31",
+        "selected_count": 0,
+        "positions_held": 0,
+        "deployed_pct": 0.0,
+        "eligible_universe_count": 0
+      },
+      {
+        "date": "2020-09-30",
+        "selected_count": 0,
+        "positions_held": 0,
+        "deployed_pct": 0.0,
+        "eligible_universe_count": 0
+      },
+      {
+        "date": "2020-10-30",
+        "selected_count": 0,
+        "positions_held": 0,
+        "deployed_pct": 0.0,
+        "eligible_universe_count": 0
+      },
+      {
+        "date": "2020-11-30",
+        "selected_count": 0,
+        "positions_held": 0,
+        "deployed_pct": 0.0,
+        "eligible_universe_count": 0
+      },
+      {
+        "date": "2020-12-31",
+        "selected_count": 0,
+        "positions_held": 0,
+        "deployed_pct": 0.0,
+        "eligible_universe_count": 0
+      },
+      {
+        "date": "2021-01-29",
+        "selected_count": 30,
+        "positions_held": 0,
+        "deployed_pct": 0.0,
+        "eligible_universe_count": 121
+      },
+      {
+        "date": "2021-02-26",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 103
+      },
+      {
+        "date": "2021-03-31",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 140
+      },
+      {
+        "date": "2021-04-30",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 152
+      },
+      {
+        "date": "2021-05-28",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 145
+      },
+      {
+        "date": "2021-06-30",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 99.93,
+        "eligible_universe_count": 142
+      },
+      {
+        "date": "2021-07-30",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 123
+      },
+      {
+        "date": "2021-08-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 123
+      },
+      {
+        "date": "2021-09-30",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 72
+      },
+      {
+        "date": "2021-10-29",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 115
+      },
+      {
+        "date": "2021-11-30",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 93
+      },
+      {
+        "date": "2021-12-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 124
+      },
+      {
+        "date": "2022-01-31",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 85
+      },
+      {
+        "date": "2022-02-28",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 72
+      },
+      {
+        "date": "2022-03-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 88
+      },
+      {
+        "date": "2022-04-29",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 65
+      },
+      {
+        "date": "2022-05-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 66
+      },
+      {
+        "date": "2022-06-30",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 35
+      },
+      {
+        "date": "2022-07-29",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 87
+      },
+      {
+        "date": "2022-08-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 66
+      },
+      {
+        "date": "2022-09-30",
+        "selected_count": 25,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 25
+      },
+      {
+        "date": "2022-10-31",
+        "selected_count": 30,
+        "positions_held": 25,
+        "deployed_pct": 87.74,
+        "eligible_universe_count": 95
+      },
+      {
+        "date": "2022-11-30",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 136
+      },
+      {
+        "date": "2022-12-30",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 104
+      },
+      {
+        "date": "2023-01-31",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 146
+      },
+      {
+        "date": "2023-02-28",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 110
+      },
+      {
+        "date": "2023-03-31",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 110
+      },
+      {
+        "date": "2023-04-28",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 100
+      },
+      {
+        "date": "2023-05-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 70
+      },
+      {
+        "date": "2023-06-30",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 123
+      },
+      {
+        "date": "2023-07-31",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 142
+      },
+      {
+        "date": "2023-08-31",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 108
+      },
+      {
+        "date": "2023-09-29",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 65
+      },
+      {
+        "date": "2023-10-31",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 42
+      },
+      {
+        "date": "2023-11-30",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 121
+      },
+      {
+        "date": "2023-12-29",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 152
+      },
+      {
+        "date": "2024-01-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 141
+      },
+      {
+        "date": "2024-02-29",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 138
+      },
+      {
+        "date": "2024-03-28",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 149
+      },
+      {
+        "date": "2024-04-30",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 96
+      },
+      {
+        "date": "2024-05-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 100
+      },
+      {
+        "date": "2024-06-28",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 102
+      },
+      {
+        "date": "2024-07-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 116
+      },
+      {
+        "date": "2024-08-30",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 132
+      },
+      {
+        "date": "2024-09-30",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 132
+      },
+      {
+        "date": "2024-10-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 108
+      },
+      {
+        "date": "2024-11-29",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 99.38,
+        "eligible_universe_count": 124
+      },
+      {
+        "date": "2024-12-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 99.06,
+        "eligible_universe_count": 71
+      },
+      {
+        "date": "2025-01-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 99.66,
+        "eligible_universe_count": 97
+      },
+      {
+        "date": "2025-02-28",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 101
+      },
+      {
+        "date": "2025-03-31",
+        "selected_count": 30,
+        "positions_held": 30,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 71
+      },
+      {
+        "date": "2025-04-30",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 69
+      },
+      {
+        "date": "2025-05-30",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 114
+      },
+      {
+        "date": "2025-06-30",
+        "selected_count": 30,
+        "positions_held": 27,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 128
+      },
+      {
+        "date": "2025-07-31",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 123
+      },
+      {
+        "date": "2025-08-29",
+        "selected_count": 30,
+        "positions_held": 27,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 137
+      },
+      {
+        "date": "2025-09-30",
+        "selected_count": 30,
+        "positions_held": 27,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 115
+      },
+      {
+        "date": "2025-10-31",
+        "selected_count": 30,
+        "positions_held": 27,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 100
+      },
+      {
+        "date": "2025-11-28",
+        "selected_count": 30,
+        "positions_held": 27,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 96
+      },
+      {
+        "date": "2025-12-31",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 103
+      },
+      {
+        "date": "2026-01-30",
+        "selected_count": 30,
+        "positions_held": 29,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 119
+      },
+      {
+        "date": "2026-02-27",
+        "selected_count": 30,
+        "positions_held": 27,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 117
+      },
+      {
+        "date": "2026-03-31",
+        "selected_count": 30,
+        "positions_held": 27,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 82
+      },
+      {
+        "date": "2026-04-30",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 98
+      },
+      {
+        "date": "2026-05-29",
+        "selected_count": 30,
+        "positions_held": 28,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 91
+      },
+      {
+        "date": "2026-06-30",
+        "selected_count": 30,
+        "positions_held": 27,
+        "deployed_pct": 100.0,
+        "eligible_universe_count": 103
+      },
+      {
+        "date": "2026-07-21",
+        "selected_count": 30,
+        "positions_held": 0,
+        "deployed_pct": 0.0,
+        "eligible_universe_count": 110
+      }
+    ],
+    "during_largest_drawdowns": [
+      {
+        "episode": "2025-02-19 -> 2025-04-08",
+        "depth_pct": -18.97,
+        "min_positions_held": 27,
+        "mean_positions_held": 28.47,
+        "min_deployed_pct": 100.0,
+        "mean_deployed_pct": 100.0
+      },
+      {
+        "episode": "2022-04-21 -> 2022-10-14",
+        "depth_pct": -18.12,
+        "min_positions_held": 25,
+        "mean_positions_held": 29.21,
+        "min_deployed_pct": 86.66,
+        "mean_deployed_pct": 99.07
+      },
+      {
+        "episode": "2021-11-22 -> 2022-01-27",
+        "depth_pct": -16.41,
+        "min_positions_held": 29,
+        "mean_positions_held": 29.62,
+        "min_deployed_pct": 100.0,
+        "mean_deployed_pct": 100.0
+      },
+      {
+        "episode": "2026-06-23 -> 2026-07-20",
+        "depth_pct": -15.4,
+        "min_positions_held": 0,
+        "mean_positions_held": 25.0,
+        "min_deployed_pct": 0.0,
+        "mean_deployed_pct": 95.0
+      },
+      {
+        "episode": "2023-08-01 -> 2023-10-27",
+        "depth_pct": -13.32,
+        "min_positions_held": 28,
+        "mean_positions_held": 28.74,
+        "min_deployed_pct": 100.0,
+        "mean_deployed_pct": 100.0
+      }
+    ]
+  }
+}
