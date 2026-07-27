@@ -1479,7 +1479,11 @@ class PortfolioManager:
             max_consecutive_losses = max(max_consecutive_losses, current_losses)
             max_consecutive_wins = max(max_consecutive_wins, current_wins)
 
-        daily_returns = equity.resample("1D").last().pct_change(fill_method=None).dropna()
+        # Same calendar-resample defect as relative_strength_rotation, fixed the
+        # same way: pct_change() after resample("1D") yields NaN for every
+        # post-weekend/holiday session, and dropna() then discarded ~22% of
+        # observations. Trading-day returns use every session. Reporting only.
+        daily_returns = equity.pct_change(fill_method=None).dropna()
         volatility = daily_returns.std()
         sharpe = (
             daily_returns.mean() / volatility * np.sqrt(252)

@@ -458,7 +458,15 @@ def _relative_strength_metrics_from_equity(
     )
     total_return = (equity.iloc[-1] / initial_cash - 1) * 100
     max_drawdown = ((equity - equity.cummax()) / equity.cummax()).min() * 100
-    daily_returns = equity.resample("1D").last().pct_change(fill_method=None).dropna()
+    # Trading-day returns, not calendar-resampled ones. resample("1D") expands
+    # the curve to CALENDAR days, so a weekend or holiday becomes NaN and
+    # pct_change then yields NaN for the FOLLOWING session, which dropna()
+    # discarded -- silently removing 327 of 1502 observations (21.8%), mostly
+    # Mondays. That made the reported Sharpe arithmetically inconsistent with
+    # this function's own CAGR and volatility (Phase 8A). Reporting only: no
+    # decision path consumes Sharpe or volatility (Phase 8D verified that the
+    # compact score, gates and filters do not reference either).
+    daily_returns = equity.pct_change(fill_method=None).dropna()
     volatility = daily_returns.std()
     sharpe = (
         daily_returns.mean() / volatility * np.sqrt(252)
