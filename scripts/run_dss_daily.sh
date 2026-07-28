@@ -137,9 +137,33 @@ if (( WAITED > 0 )); then
     log "network became available after ${WAITED}s"
 fi
 
+# 6. Hold sleep/idle off for the DURATION OF THE CHAIN ONLY.
+#
+#    The 2026-07-27 run spanned ~13h of wall clock because the machine
+#    suspended repeatedly mid-refresh. The lock is scoped to this process: it is
+#    released the moment the chain exits, so normal sleep behaviour returns.
+#    Nothing is disabled globally.
+#
+#    Verified on this host that a user unit can actually take the lock (it
+#    registers under `systemd-inhibit --list` from inside a transient
+#    `systemd-run --user` unit), so this is not an inert directive. If the
+#    binary is missing the chain still runs -- a missing inhibitor must not stop
+#    the nightly report -- but it says so loudly.
+INHIBIT_PREFIX=()
+if command -v systemd-inhibit >/dev/null 2>&1; then
+    INHIBIT_PREFIX=(systemd-inhibit
+        --what=sleep:idle
+        --mode=block
+        --who="dss-daily"
+        --why="nightly DSS chain in progress")
+    log "sleep/idle inhibited for the duration of the chain"
+else
+    log "WARNING: systemd-inhibit not found; the machine may suspend mid-run and stretch the refresh"
+fi
+
 log "starting scheduler chain $*"
 
-"$RUN_PYTHON" "$PROJECT_ROOT/testdata/dss_scheduler.py" "$@" 2>&1 | tee -a "$LOG_FILE"
+"${INHIBIT_PREFIX[@]}" "$RUN_PYTHON" "$PROJECT_ROOT/testdata/dss_scheduler.py" "$@" 2>&1 | tee -a "$LOG_FILE"
 EXIT_CODE="${PIPESTATUS[0]}"
 
 log "completed with exit code $EXIT_CODE"
