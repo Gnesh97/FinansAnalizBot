@@ -197,5 +197,72 @@ class TestRefreshResumability(unittest.TestCase):
             self.assertEqual(len(refreshed), 4)
 
 
+class RetryTelemetryContractTest(unittest.TestCase):
+    """Phase 8E: the 2026-07-27 refresh was rejected by the telemetry contract
+    although its data was sound.
+
+    182 provider attempts vs 179 logical items looked corrupt, but reconciled
+    exactly: one registry EARLY_TERMINAL skip made no call, and four
+    drift-triggered re-acquisitions each added a call WITHOUT a failure. The
+    contract now expresses both, and must still reject anything that does not
+    balance.
+    """
+
+    BASE = {
+        "retry_telemetry_status": "MEASURED",
+        "logical_acquisition_item_count": 179,
+        "retry_attempt_count": 0,
+        "failed_provider_attempt_count": 0,
+    }
+
+    def _validate(self, **overrides):
+        from testdata.vericekici_updated import validate_v2_retry_telemetry
+        validate_v2_retry_telemetry({**self.BASE, **overrides})
+
+    # --- legitimate runs must PASS ---
+    def test_the_actual_2026_07_27_refresh_is_accepted(self):
+        self._validate(provider_attempt_count=182,
+                       no_provider_call_item_count=1, reacquisition_item_count=4)
+
+    def test_pre_refresh_manifest_without_the_new_fields_still_passes(self):
+        self._validate(provider_attempt_count=179)
+
+    def test_interrupted_and_resumed_run_with_retries_passes(self):
+        # 100 items already done in a previous segment, 3 rate-limit retries.
+        self._validate(provider_attempt_count=82, retry_attempt_count=3,
+                       failed_provider_attempt_count=3,
+                       no_provider_call_item_count=100, reacquisition_item_count=0)
+
+    # --- anything incoherent must still REJECT ---
+    def test_unrecorded_reacquisition_still_rejects(self):
+        # The exact defect the contract exists to catch: extra provider calls
+        # that nothing accounts for.
+        with self.assertRaises(ValueError):
+            self._validate(provider_attempt_count=182,
+                           no_provider_call_item_count=1, reacquisition_item_count=0)
+
+    def test_absent_telemetry_status_rejects(self):
+        from testdata.vericekici_updated import validate_v2_retry_telemetry
+        manifest = {k: v for k, v in self.BASE.items() if k != "retry_telemetry_status"}
+        with self.assertRaises(ValueError):
+            validate_v2_retry_telemetry({**manifest, "provider_attempt_count": 179})
+
+    def test_malformed_explanatory_counts_reject(self):
+        for bad in (None, -1, True, "4"):
+            with self.subTest(value=bad), self.assertRaises(ValueError):
+                self._validate(provider_attempt_count=182,
+                               no_provider_call_item_count=1, reacquisition_item_count=bad)
+
+    def test_skips_cannot_exceed_the_logical_item_count(self):
+        with self.assertRaises(ValueError):
+            self._validate(provider_attempt_count=0,
+                           no_provider_call_item_count=200, reacquisition_item_count=0)
+
+    def test_failed_count_must_still_equal_retry_count(self):
+        with self.assertRaises(ValueError):
+            self._validate(provider_attempt_count=182, failed_provider_attempt_count=5,
+                           no_provider_call_item_count=1, reacquisition_item_count=4)
+
+
 if __name__ == "__main__":
     unittest.main()

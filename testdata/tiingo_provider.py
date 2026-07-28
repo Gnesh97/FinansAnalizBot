@@ -344,6 +344,16 @@ def run_v2_tiingo_daily_refresh(
 
     provider_attempt_count = 0
     retry_attempt_count = 0
+    # Two legitimate reasons provider attempts do not equal the logical item
+    # count, both of which the telemetry contract must be able to express:
+    #   - items that make NO provider call (registry EARLY_TERMINAL skips, and
+    #     items already completed in this run that a resume walks past)
+    #   - drift-triggered full re-acquisitions, which add a call WITHOUT a
+    #     failure, so they are not retries
+    # Without these a long, interrupted, resumed refresh is indistinguishable
+    # from corrupted telemetry. See validate_v2_retry_telemetry.
+    no_provider_call_item_count = 0
+    reacquisition_item_count = 0
     refreshed_records = {}
     timing = []
     for symbol in selected:
@@ -352,6 +362,7 @@ def run_v2_tiingo_daily_refresh(
         if symbol in terminal:
             print(f"{symbol}: SKIPPED (registry EARLY_TERMINAL, no data can exist after approved_last_session)", flush=True)
             refreshed_records[symbol] = {"provider_result_status": "SKIPPED", "adjustment_drift_detected": False}
+            no_provider_call_item_count += 1
             state["symbols"][symbol] = {"status": "SKIPPED", "refresh_end": refresh_end}
             _save_acquisition_state(state, state_path)
             continue
@@ -368,6 +379,7 @@ def run_v2_tiingo_daily_refresh(
                 "adjustment_drift_detected": state_entry.get("adjustment_drift_detected", False),
                 **{k: state_entry[k] for k in ("max_drift_pct", "drift_session", "drift_column") if k in state_entry},
             }
+            no_provider_call_item_count += 1
             continue
         if not destination.exists():
             raise ValueError(f"V2_TIINGO_REFRESH_MISSING_BASE_FILE: {symbol}")
@@ -391,6 +403,7 @@ def run_v2_tiingo_daily_refresh(
             full, attempts_full, _ = _fetch_window_paced(symbol, api_key, V2_TIINGO_TARGET_START, refresh_end, pace_delay_seconds, max_rate_limit_waits)
             provider_attempt_count += attempts_full
             retry_attempt_count += attempts_full - 1
+            reacquisition_item_count += 1
             module.atomic_write_csv(full, destination)
             status = "DOWNLOADED"
         else:
@@ -422,6 +435,8 @@ def run_v2_tiingo_daily_refresh(
         "drift_detected_symbols": sorted(s for s, r in refreshed_records.items() if r.get("adjustment_drift_detected")),
         "provider_attempt_count": provider_attempt_count,
         "retry_attempt_count": retry_attempt_count,
+        "no_provider_call_item_count": no_provider_call_item_count,
+        "reacquisition_item_count": reacquisition_item_count,
         "per_symbol_timing": timing,
     }
     if symbols_subset is not None:
@@ -476,6 +491,8 @@ def run_v2_tiingo_daily_refresh(
         "provider_attempt_count": provider_attempt_count,
         "retry_attempt_count": retry_attempt_count,
         "failed_provider_attempt_count": retry_attempt_count,
+        "no_provider_call_item_count": no_provider_call_item_count,
+        "reacquisition_item_count": reacquisition_item_count,
         "files": records,
     }
     run_manifest_path = manifests_dir / run_id / "acquisition_manifest.json"

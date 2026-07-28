@@ -157,10 +157,34 @@ def validate_v2_retry_telemetry(manifest: dict) -> None:
     if telemetry_status == "MEASURED":
         provider_attempts, retry_attempts, failed_attempts = telemetry_values
         base_operation_count = manifest.get("logical_acquisition_item_count")
+        # A daily refresh legitimately departs from "one provider call per
+        # logical item" in exactly two ways, and both must be declared:
+        #   no_provider_call_item_count -- registry EARLY_TERMINAL skips and
+        #       items a resume walks past, which issue NO request
+        #   reacquisition_item_count -- drift-triggered full re-acquisitions,
+        #       which add a request WITHOUT a failure, so they are not retries
+        # Absent on pre-refresh manifests, where both are zero and the identity
+        # collapses to the original provider == base + retries. Declared but
+        # malformed (None, negative, bool, non-int) still REJECTS, as does any
+        # set of counts that fails to reconcile -- a refresh that forgets to
+        # record a re-acquisition cannot balance, and is rejected.
+        no_provider_call_items = manifest.get("no_provider_call_item_count", 0)
+        reacquisition_items = manifest.get("reacquisition_item_count", 0)
+        explanatory_valid = all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (no_provider_call_items, reacquisition_items)
+        )
+        expected_attempts = (
+            (base_operation_count - no_provider_call_items) + retry_attempts + reacquisition_items
+            if isinstance(base_operation_count, int) and explanatory_valid
+            else None
+        )
         if (
             not measured_values_valid
             or not isinstance(base_operation_count, int)
-            or provider_attempts != base_operation_count + retry_attempts
+            or not explanatory_valid
+            or no_provider_call_items > base_operation_count
+            or provider_attempts != expected_attempts
             or failed_attempts != retry_attempts
         ):
             raise ValueError("V2_DATASET_NOT_VALIDATED: retry telemetry invalid")
