@@ -279,8 +279,14 @@ def save_pending_notices(notices: list[dict], path: Path = PENDING_NOTICE_PATH) 
 
 
 def queue_notice(text: str, reason: str, session: str | None = None,
-                 path: Path = PENDING_NOTICE_PATH, as_of: datetime | None = None) -> dict:
-    """Persist an undelivered notice so a later run can still report it."""
+                 path: Path = PENDING_NOTICE_PATH, as_of: datetime | None = None,
+                 synthetic: bool = False) -> dict:
+    """Persist an undelivered notice so a later run can still report it.
+
+    synthetic=True marks a payload produced by a verification/self-test path.
+    drain_pending_notices refuses to deliver such entries, so a test payload can
+    never reach the operator's chat even if it reaches this file.
+    """
     now = as_of or datetime.now(timezone.utc)
     entry = {
         "queued_at": now.isoformat().replace("+00:00", "Z"),
@@ -288,6 +294,7 @@ def queue_notice(text: str, reason: str, session: str | None = None,
         "text": text,
         "reason": reason,
         "attempts": 0,
+        "synthetic": bool(synthetic),
     }
     notices = load_pending_notices(path)
     notices.append(entry)
@@ -316,7 +323,14 @@ def drain_pending_notices(path: Path = PENDING_NOTICE_PATH, as_of: datetime | No
 
     delivered, dropped, remaining = 0, 0, []
     for entry in notices:
-        session_label = entry.get("session") or "unknown session"
+        if entry.get("synthetic"):
+            # Delivery-side backstop: a synthetic payload is discarded here and
+            # never transmitted, whatever put it in the file.
+            dropped += 1
+            print(f"[dss-scheduler] DISCARDING synthetic queued notice "
+                  f"(queued {entry.get('queued_at')}): never sent to the operator.", flush=True)
+            continue
+        session_label = entry.get("session") or "unknown"
         late_text = (f"{LATE_NOTICE_MARKER} (queued {entry.get('queued_at')}, session {session_label}): "
                      f"{entry.get('text', '')}")
         try:
@@ -343,7 +357,7 @@ def send_failure_notice(
     session: str | None = None,
     attempts: int = NOTICE_SEND_ATTEMPTS,
     retry_sleep_seconds: float = NOTICE_RETRY_SLEEP_SECONDS,
-    queue_path: Path = PENDING_NOTICE_PATH,
+    queue_path: Path | None = None,
     queue_on_failure: bool = True,
     sleep=time.sleep,
 ) -> dict:
@@ -379,6 +393,16 @@ def send_failure_notice(
 
     queued = False
     if queue_on_failure:
+        if queue_path is None:
+            # Structural guard at the only line that WRITES: a caller that does
+            # not name its queue file would silently fall back to the production
+            # one. That is exactly how "boom" test payloads reached the
+            # operator's chat, so it is now a hard error rather than a default.
+            raise ValueError(
+                "send_failure_notice requires an explicit queue_path in order to queue; "
+                "pass dss_scheduler.PENDING_NOTICE_PATH in production or a temporary "
+                "path in tests."
+            )
         queue_notice(text, last_detail, session=session, path=queue_path)
         queued = True
     _undeliverable_banner(text, last_detail, queued)

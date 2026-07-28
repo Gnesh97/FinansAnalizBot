@@ -16,6 +16,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "testdata"))
 
 from testdata import dss_scheduler
 
+# Phase 8E: snapshot the PRODUCTION notice queue before any test runs, so a test
+# that writes to it is caught rather than discovered via the operator's phone.
+_PRODUCTION_QUEUE = dss_scheduler.PENDING_NOTICE_PATH
+_PRODUCTION_QUEUE_AT_IMPORT = (
+    _PRODUCTION_QUEUE.read_text(encoding="utf-8") if _PRODUCTION_QUEUE.exists() else None
+)
+
 SATURDAY = datetime(2026, 7, 25, 20, 30, tzinfo=timezone.utc)
 # 22:00 UTC == 01:00 Europe/Istanbul, the installed timer's actual fire time and
 # two hours after the 20:00 UTC close. Phase 8B moved this off 20:30 UTC: with
@@ -145,16 +152,24 @@ class TestFailLoud(unittest.TestCase):
         # .env load the notice would silently fail closed every night.
         with patch.object(dss_scheduler, "_load_project_env") as load_env, \
              patch.dict(dss_scheduler.os.environ, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}, clear=False):
-            dss_scheduler.send_failure_notice("boom")
+            dss_scheduler.send_failure_notice("synthetic self-test payload",
+                                              queue_path=Path("/nonexistent/never-written.json"))
         load_env.assert_called_once()
 
     def test_delivery_error_text_never_leaks_the_bot_token(self):
-        with patch.object(dss_scheduler, "_load_project_env"), \
-             patch.dict(dss_scheduler.os.environ, {"TELEGRAM_BOT_TOKEN": "SECRET-TOKEN", "TELEGRAM_CHAT_ID": "42"}, clear=False), \
-             patch.object(dss_scheduler.urllib.request, "urlopen", side_effect=RuntimeError("failed calling bot SECRET-TOKEN endpoint")):
-            result = dss_scheduler.send_failure_notice("boom")
+        # Phase 8E: an explicit temporary queue_path is mandatory. Without it
+        # this test appended a real "boom" entry to the production queue on
+        # every suite run, which the next connected run then delivered.
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(dss_scheduler, "_load_project_env"), \
+             patch.dict(dss_scheduler.os.environ, {"TELEGRAM_BOT_TOKEN": "SECRET-TOKEN-THAT-IS-LONG", "TELEGRAM_CHAT_ID": "42"}, clear=False), \
+             patch.object(dss_scheduler.urllib.request, "urlopen", side_effect=RuntimeError("failed calling bot SECRET-TOKEN-THAT-IS-LONG endpoint")):
+            result = dss_scheduler.send_failure_notice(
+                "synthetic self-test payload", attempts=1, retry_sleep_seconds=0,
+                queue_path=Path(temp) / "pending.json", sleep=lambda _: None,
+            )
         self.assertFalse(result["sent"])
-        self.assertNotIn("SECRET-TOKEN", result["reason"])
+        self.assertNotIn("SECRET-TOKEN-THAT-IS-LONG", result["reason"])
         self.assertIn("<redacted>", result["reason"])
 
 
@@ -412,6 +427,83 @@ class TestUndeliveredNoticeQueueing(unittest.TestCase):
                 drained = dss_scheduler.drain_pending_notices(pending)
             post.assert_not_called()
             self.assertEqual(drained, {"delivered": 0, "remaining": 0, "dropped": 0})
+
+
+class TestProductionQueueIsNeverTouchedByTests(unittest.TestCase):
+    """Phase 8E: the operator received 10 real Telegram messages saying
+    "DSS did not run: boom" because send_failure_notice defaulted queue_path to
+    the production queue, so every suite run appended a live entry that the next
+    connected run dutifully delivered."""
+
+    def test_production_queue_file_is_unchanged_by_this_suite(self):
+        current = (
+            _PRODUCTION_QUEUE.read_text(encoding="utf-8")
+            if _PRODUCTION_QUEUE.exists() else None
+        )
+        self.assertEqual(
+            current, _PRODUCTION_QUEUE_AT_IMPORT,
+            f"a test wrote to the PRODUCTION notice queue {_PRODUCTION_QUEUE}; "
+            f"those entries get delivered to the operator's real chat",
+        )
+
+    def test_queueing_without_an_explicit_path_is_a_hard_error(self):
+        with patch.object(dss_scheduler, "_load_project_env"), \
+             patch.dict(dss_scheduler.os.environ,
+                        {"TELEGRAM_BOT_TOKEN": "token-long-enough", "TELEGRAM_CHAT_ID": "42"}, clear=False), \
+             patch.object(dss_scheduler, "_post_telegram", side_effect=OSError("down")):
+            with self.assertRaises(ValueError) as caught:
+                dss_scheduler.send_failure_notice(
+                    "synthetic self-test payload", attempts=1,
+                    retry_sleep_seconds=0, sleep=lambda _: None,
+                )
+        self.assertIn("explicit queue_path", str(caught.exception))
+
+
+class TestSyntheticPayloadsAreNeverDelivered(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.dict("os.environ",
+                             {"TELEGRAM_BOT_TOKEN": "token-long-enough", "TELEGRAM_CHAT_ID": "c"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        env_patcher = patch.object(dss_scheduler, "_load_project_env", lambda: None)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
+    def test_synthetic_entry_is_discarded_and_never_sent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            dss_scheduler.queue_notice("DSS did not run: boom", reason="self-test",
+                                       session=None, path=pending, synthetic=True)
+            with patch.object(dss_scheduler, "_post_telegram") as post:
+                drained = dss_scheduler.drain_pending_notices(pending)
+            post.assert_not_called()
+            self.assertEqual(drained["delivered"], 0)
+            self.assertEqual(drained["dropped"], 1)
+            self.assertEqual(dss_scheduler.load_pending_notices(pending), [])
+
+    def test_genuine_entry_alongside_a_synthetic_one_still_gets_through(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            dss_scheduler.queue_notice("DSS did not run: boom", reason="self-test",
+                                       path=pending, synthetic=True)
+            dss_scheduler.queue_notice("DSS did not run: refresh step exited 1",
+                                       reason="dns", session="2026-07-27", path=pending)
+            with patch.object(dss_scheduler, "_post_telegram") as post:
+                drained = dss_scheduler.drain_pending_notices(pending)
+            self.assertEqual(drained["delivered"], 1)
+            self.assertEqual(drained["dropped"], 1)
+            self.assertIn("2026-07-27", post.call_args[0][0])
+
+    def test_unknown_session_label_is_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            pending = Path(temp) / "pending.json"
+            dss_scheduler.queue_notice("DSS did not run: x", reason="dns",
+                                       session=None, path=pending)
+            with patch.object(dss_scheduler, "_post_telegram") as post:
+                dss_scheduler.drain_pending_notices(pending)
+            sent = post.call_args[0][0]
+        self.assertIn("session unknown)", sent)
+        self.assertNotIn("unknown session", sent)
 
 
 if __name__ == "__main__":
