@@ -19,7 +19,7 @@
     "short_trading_enabled": false,
     "signal_timing": "last_130min_bar_on_rebalance_date"
   },
-  "generated_at": "2026-07-24T16:01:48.656786Z",
+  "generated_at": "2026-07-28T16:31:12.521680Z",
   "sizing_contract": {
     "cash_bound_function": "calculate_max_shares",
     "commission_per_share": 0,
