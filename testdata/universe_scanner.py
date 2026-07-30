@@ -4,14 +4,14 @@ try:
     import os
     from pathlib import Path
 
-    from .runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_order_lifecycle_monitor, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
+    from .runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_order_lifecycle_monitor, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_risk_engine_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 except ImportError:
     import argparse
     import sys
     import os
     from pathlib import Path
 
-    from runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_order_lifecycle_monitor, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
+    from runner import run_alpaca_paper_check, run_alpaca_paper_submit_one, run_alpaca_paper_submit_readiness, run_apply_paper_order_review_decisions, run_broker_cutover_readiness, run_broker_order_lifecycle_monitor, run_broker_reconciliation, run_closed_trade_report, run_create_broker_cutover_baseline, run_execution_cost_preview, run_execution_preview_check, run_intraday_paper_monitor, run_no_lookahead_audit, run_paper_5min_fill_check, run_paper_decision_inbox, run_paper_ops_dashboard, run_paper_risk_dashboard, run_risk_engine_dashboard, run_pending_5min_refresh, run_sqlite_state_reconciliation, run_strategy_experiments, run_universe_scanner
 
 
 VALIDATION_EXPERIMENTS = [
@@ -302,6 +302,12 @@ if __name__ == "__main__":
         help="Write report-only local paper portfolio risk dashboard from existing latest reports; no state mutation.",
     )
     parser.add_argument(
+        "--risk-engine-dashboard",
+        action="store_true",
+        help="Write report-only Risk Engine (Mode A) dashboard: ATR/volatility, portfolio heat, paper-book daily "
+        "loss-limit warning, advisory kill switch. Advisory only; never sizes positions or places orders.",
+    )
+    parser.add_argument(
         "--closed-trade-report",
         action="store_true",
         help="Write report-only local paper closed trade and realized PnL report; no state mutation.",
@@ -418,6 +424,9 @@ if __name__ == "__main__":
         raise SystemExit(0)
     if args.paper_risk_dashboard:
         run_paper_risk_dashboard(str(data_folder))
+        raise SystemExit(0)
+    if args.risk_engine_dashboard:
+        run_risk_engine_dashboard(str(data_folder))
         raise SystemExit(0)
     if args.closed_trade_report:
         run_closed_trade_report(str(data_folder))

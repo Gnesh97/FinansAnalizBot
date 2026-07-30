@@ -62,6 +62,7 @@ try:
     from .paper_ops_dashboard import write_paper_ops_dashboard
     from .paper_decision_inbox import write_paper_decision_inbox
     from .paper_risk_dashboard import write_paper_risk_dashboard
+    from .risk_engine import write_risk_engine_report
     from .closed_trade_report import write_closed_trade_report
     from .no_lookahead_audit import write_no_lookahead_audit
     from .execution_costs import write_execution_cost_preview
@@ -149,6 +150,7 @@ except ImportError:
     from paper_ops_dashboard import write_paper_ops_dashboard
     from paper_decision_inbox import write_paper_decision_inbox
     from paper_risk_dashboard import write_paper_risk_dashboard
+    from risk_engine import write_risk_engine_report
     from closed_trade_report import write_closed_trade_report
     from no_lookahead_audit import write_no_lookahead_audit
     from execution_costs import write_execution_cost_preview
@@ -7077,6 +7079,26 @@ def run_paper_risk_dashboard(data_folder="hisseler", report_output_dir="reports"
     print(f"Paper risk dashboard csv: {latest_dir / 'paper_risk_dashboard.csv'}")
     print(f"Paper risk dashboard json: {latest_dir / 'paper_risk_dashboard.json'}")
     print(f"risk_status: {risk.get('risk_status', '')}")
+    return result
+
+
+def run_risk_engine_dashboard(data_folder="hisseler", report_output_dir="reports"):
+    latest_dir, _ = _report_output_paths(report_output_dir, data_folder)
+    data_path = Path(data_folder)
+    if not data_path.is_absolute():
+        data_path = Path(__file__).resolve().parent / data_path
+    daily_dir = data_path / "daily"
+    result = write_risk_engine_report(latest_dir, daily_dir)
+    report = result.get("report", {})
+    heat = report.get("portfolio_heat", {})
+    loss_limit = report.get("daily_loss_limit", {})
+    kill_switch = report.get("kill_switch", {})
+    print(f"Risk engine report: {latest_dir / 'risk_engine_report.md'}")
+    print(f"Risk engine report csv: {latest_dir / 'risk_engine_report.csv'}")
+    print(f"Risk engine report json: {latest_dir / 'risk_engine_report.json'}")
+    print(f"portfolio_heat_pct: {heat.get('heat_pct', '')}")
+    print(f"daily_loss_limit_breached: {loss_limit.get('breached', '')}")
+    print(f"kill_switch_advisory_triggered: {kill_switch.get('advisory_triggered', '')}")
     return result
 
 
