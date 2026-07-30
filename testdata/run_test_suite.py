@@ -83,13 +83,33 @@ def _inactive_baseline_guards(output: str) -> list[str]:
     A skipped baseline guard still yields a green suite, so it is surfaced here
     and in the run report rather than being left to a bare "OK (skipped=N)".
     """
-    marker = "[BASELINE-GUARD-INACTIVE]"
+    return _markered_guard_names(output, "[BASELINE-GUARD-INACTIVE]")
+
+
+def _markered_guard_names(output: str, marker: str) -> list[str]:
+    """Guard names from marker lines shaped `<marker> guard=<name> [key=value ...]`."""
     names = []
     for line in output.splitlines():
         stripped = line.strip()
-        if stripped.startswith(marker):
-            names.append(stripped[len(marker):].strip().removeprefix("guard=").strip())
+        if not stripped.startswith(marker):
+            continue
+        payload = stripped[len(marker):].strip()
+        for token in payload.split():
+            if token.startswith("guard="):
+                names.append(token[len("guard="):])
+                break
+        else:
+            names.append(payload)
     return sorted(set(names))
+
+
+def _metric_drift_guards(output: str) -> list[str]:
+    """Guards reporting headline-metric drift beyond threshold.
+
+    See tests/baseline_metric_drift.py. This is INFORMATIONAL -- the suite stays
+    green -- so it must be surfaced here or it would only exist mid-scrollback.
+    """
+    return _markered_guard_names(output, "[BASELINE-METRIC-DRIFT]")
 
 
 def _failed_tests(output: str) -> list[str]:
@@ -108,9 +128,11 @@ def _write_report(
     tests_ran: int,
     failures: list[str],
     inactive_guards: list[str] | None = None,
+    metric_drift_guards: list[str] | None = None,
 ) -> None:
     LATEST_DIR.mkdir(parents=True, exist_ok=True)
     inactive_guards = inactive_guards or []
+    metric_drift_guards = metric_drift_guards or []
     lines = [
         "# Test Run Report",
         "",
@@ -118,6 +140,7 @@ def _write_report(
         f"- status: {status}",
         f"- tests ran count: {tests_ran}",
         f"- inactive baseline guards: {len(inactive_guards)}",
+        f"- baseline guards reporting metric drift: {len(metric_drift_guards)}",
         f"- command: `{command}`",
         f"- duration_sec: {duration:.4f}",
         "- safety note: Unit tests only; no broker POST, no submit_order, no live trading.",
@@ -137,6 +160,15 @@ def _write_report(
         lines.extend(f"- {name}" for name in inactive_guards)
     else:
         lines.append("- none (all baseline guards active)")
+    lines.extend(["", "## Baseline Metric Drift", ""])
+    if metric_drift_guards:
+        lines.append("Headline metrics moved beyond the informational threshold. This does")
+        lines.append("NOT fail the suite -- the selection fingerprint is the hard invariant")
+        lines.append("and is asserted exactly. Investigate before re-freezing.")
+        lines.append("")
+        lines.extend(f"- {name}" for name in metric_drift_guards)
+    else:
+        lines.append("- none (no guard reported metric drift beyond threshold)")
     lines.append("")
     (LATEST_DIR / "test_run_report.md").write_text("\n".join(lines), encoding="utf-8")
 
@@ -152,6 +184,7 @@ def main() -> int:
     combined = compile_output + test_output
     status = "OK" if compile_code == 0 and test_code == 0 else "FAIL"
     inactive_guards = _inactive_baseline_guards(combined)
+    metric_drift_guards = _metric_drift_guards(combined)
     _write_report(
         status,
         command_text,
@@ -159,6 +192,7 @@ def main() -> int:
         _tests_ran_count(combined),
         _failed_tests(combined),
         inactive_guards,
+        metric_drift_guards,
     )
     # Printed after the unittest summary so it is the last thing on screen: a
     # green "OK" with skipped baseline guards must not read as a verified run.
@@ -170,6 +204,18 @@ def main() -> int:
         )
     else:
         print("\nSUITE SUMMARY: 0 baseline guards inactive; all frozen baselines verified.", flush=True)
+    # Metric drift never fails the suite, so a green run is exactly the case in
+    # which it would otherwise go unread. Print it last, after the status line.
+    if metric_drift_guards:
+        print(
+            f"SUITE SUMMARY: {len(metric_drift_guards)} baseline guard(s) reported HEADLINE "
+            f"METRIC DRIFT beyond threshold: {', '.join(metric_drift_guards)}\n"
+            f"               The suite did not fail on this -- the selection fingerprint is\n"
+            f"               asserted exactly and separately. Investigate before re-freezing.",
+            flush=True,
+        )
+    else:
+        print("SUITE SUMMARY: 0 baseline guards reported headline-metric drift.", flush=True)
     return 0 if status == "OK" else (compile_code or test_code or 1)
 
 

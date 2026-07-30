@@ -463,9 +463,16 @@ def _relative_strength_metrics_from_equity(
     # pct_change then yields NaN for the FOLLOWING session, which dropna()
     # discarded -- silently removing 327 of 1502 observations (21.8%), mostly
     # Mondays. That made the reported Sharpe arithmetically inconsistent with
-    # this function's own CAGR and volatility (Phase 8A). Reporting only: no
-    # decision path consumes Sharpe or volatility (Phase 8D verified that the
-    # compact score, gates and filters do not reference either).
+    # this function's own CAGR and volatility (Phase 8A).
+    #
+    # Reporting only. Phase 9A sharpened an over-broad claim made here in Phase
+    # 8D: this module DOES have a volatility that drives decisions -- the
+    # per-symbol 60-day rolling price volatility in
+    # _relative_strength_daily_features, which forms `score = total_return /
+    # annualized_vol` and therefore the ranking. That is a different quantity
+    # from this one, which is the standard deviation of the PORTFOLIO EQUITY
+    # CURVE and feeds nothing but Sharpe. Different input, different function.
+    # Nothing gates, filters or sizes on the equity-curve volatility or Sharpe.
     daily_returns = equity.pct_change(fill_method=None).dropna()
     volatility = daily_returns.std()
     sharpe = (

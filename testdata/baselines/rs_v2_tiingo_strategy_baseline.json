@@ -1,15 +1,105 @@
 {
   "baseline_schema_version": "1.0.0",
   "dataset_profile": "rs_v2_tiingo",
-  "generated_at": "2026-07-26T10:23:28.748473Z",
+  "generated_at": "2026-07-29T16:53:48.323685Z",
   "metrics": {
-    "cagr_pct": 18.46,
-    "max_drawdown_pct": -18.97,
-    "net_return_pct": 175.49,
-    "sharpe_ratio": 0.53,
-    "trade_count": 770,
-    "win_rate_pct": 50.1
+    "cagr_pct": 18.47,
+    "max_drawdown_pct": -19.36,
+    "net_return_pct": 175.7,
+    "sharpe_ratio": 1.0,
+    "trade_count": 768,
+    "win_rate_pct": 50.0
   },
+  "provenance": {
+    "dataset": {
+      "acquisition_run_id": "acq_20260727_220002",
+      "candidate_universe_hash": "026f66d117870753a094d2e3043a5f6efa87786532700070ea3b7dfb9bda2933",
+      "manifest_sha256": "63763462ac445d21ac86341ea93e1a5a9b7b93c7c5cf858f428343aae46a172c",
+      "manifest_status": "COMPLETE_VALIDATED",
+      "reacquired_symbols": [
+        "CVS",
+        "PFE",
+        "PG",
+        "T"
+      ],
+      "reacquisition_item_count": 4,
+      "target_end_date": "2026-07-27",
+      "validation_completed_at": "2026-07-28T16:31:09.260471Z"
+    },
+    "fingerprint_change_forced": false,
+    "fingerprint_changed": false,
+    "metric_deltas": [
+      {
+        "absolute_delta": 0.00999999999999801,
+        "current": 18.47,
+        "metric": "cagr_pct",
+        "previous": 18.46,
+        "relative_delta": 0.0005417118093173353
+      },
+      {
+        "absolute_delta": -0.39000000000000057,
+        "current": -19.36,
+        "metric": "max_drawdown_pct",
+        "previous": -18.97,
+        "relative_delta": 0.020558777016341623
+      },
+      {
+        "absolute_delta": 0.20999999999997954,
+        "current": 175.7,
+        "metric": "net_return_pct",
+        "previous": 175.49,
+        "relative_delta": 0.001196649381731036
+      },
+      {
+        "absolute_delta": 0.47,
+        "current": 1.0,
+        "metric": "sharpe_ratio",
+        "previous": 0.53,
+        "relative_delta": 0.8867924528301886
+      },
+      {
+        "absolute_delta": -2.0,
+        "current": 768,
+        "metric": "trade_count",
+        "previous": 770,
+        "relative_delta": 0.0025974025974025974
+      },
+      {
+        "absolute_delta": -0.10000000000000142,
+        "current": 50.0,
+        "metric": "win_rate_pct",
+        "previous": 50.1,
+        "relative_delta": 0.0019960079840319646
+      }
+    ],
+    "previous_artifact": "testdata/baselines/history/rs_v2_tiingo_strategy_baseline_20260726T102328.748473Z.json",
+    "previous_fingerprint_sha256": "ba697e9653db37bdf348af1abc50de3366fe2cfbd26a271498cb31359fcada73",
+    "previous_generated_at": "2026-07-26T10:23:28.748473Z",
+    "previous_metrics": {
+      "cagr_pct": 18.46,
+      "max_drawdown_pct": -18.97,
+      "net_return_pct": 175.49,
+      "sharpe_ratio": 0.53,
+      "trade_count": 770,
+      "win_rate_pct": 50.1
+    },
+    "refreeze_reason": "Phase 9A: (a) Tiingo drift-triggered full re-acquisition of CVS, PFE, PG, T on refresh acq_20260727_220002 re-adjusted those symbols' entire price history, moving execution-level fills; (b) Phase 8D/9A Sharpe convention fix (calendar-resample -> trading-day returns) corrected sharpe_ratio 0.53 -> 1.0. Selection fingerprint unchanged in both cases, so ranking logic is unaffected.",
+    "refrozen_at": "2026-07-29T16:53:48.329747Z"
+  },
+  "refreeze_history": [
+    {
+      "acquisition_run_id": "acq_20260727_220002",
+      "artifact": "testdata/baselines/history/rs_v2_tiingo_strategy_baseline_20260726T102328.748473Z.json",
+      "reacquired_symbols": [
+        "CVS",
+        "PFE",
+        "PG",
+        "T"
+      ],
+      "reason": "Phase 9A: (a) Tiingo drift-triggered full re-acquisition of CVS, PFE, PG, T on refresh acq_20260727_220002 re-adjusted those symbols' entire price history, moving execution-level fills; (b) Phase 8D/9A Sharpe convention fix (calendar-resample -> trading-day returns) corrected sharpe_ratio 0.53 -> 1.0. Selection fingerprint unchanged in both cases, so ranking logic is unaffected.",
+      "refrozen_at": "2026-07-29T16:53:48.329747Z"
+    }
+  ],
   "selection": {
     "fingerprint_sha256": "ba697e9653db37bdf348af1abc50de3366fe2cfbd26a271498cb31359fcada73",
     "first_rebalance_date": "2021-01-29",

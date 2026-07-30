@@ -1,21 +1,44 @@
 """Frozen strategy baseline guard for the rs_v2_tiingo production dataset (Phase 7A).
 
-This is THE governing regression guard for the live system. It pins both the
-headline metrics and a per-rebalance selection fingerprint, so drift is caught
-at selection level and not only when it happens to move the headline return.
+This is THE governing regression guard for the live system.
 
 It supersedes the SIP-era numbers (165.9133%/762): rs_v2_sip carries stale
 spinoff adjustments for FDX/CMCSA/MMM/MDT (verified in Phase 6A), so its
 returns are computed on prices that no longer reflect those corporate actions.
 
-Tolerances are deliberately tight -- metrics to the stored precision, trade
-count and fingerprint exact. The perturbation tests below prove the guard
-actually fails on drift rather than passing vacuously.
+STRUCTURE (Phase 9A -- operator decision, recorded in
+reports/audit/phase9a_sharpe_fix_and_guard_restructure_20260729.md)
+
+  HARD, EXACT assertions -- these fail the suite:
+    - the per-rebalance selection fingerprint
+    - the frozen 177-symbol universe
+    - the retained target end session
+    - structural presence of every pinned headline metric
+
+  INFORMATIONAL -- recorded and reported, never fails the suite:
+    - the headline metric VALUES (return, trades, CAGR, max drawdown, Sharpe,
+      win rate)
+
+Why the split: Tiingo retroactively re-adjusts prices for corporate actions, and
+the nightly refresh re-acquires those symbols' full history. On 2026-07-27 that
+happened for CVS, PFE, PG and T; the headline metrics moved while the selection
+fingerprint matched exactly. Failing the suite for that trains the operator to
+ignore the governing guard -- the same failure mode as the Phase 8E notice spam.
+
+The fingerprint is the real invariant: it proves ranking/selection is unchanged
+regardless of vendor price adjustments. The perturbation tests below prove it
+still fails on drift rather than passing vacuously.
+
+When metrics move legitimately, re-freeze with provenance:
+    python3 scripts/refreeze_tiingo_strategy_baseline.py --help
 """
 
+import io
 import json
+import math
 import sys
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "testdata"))
@@ -37,6 +60,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_tiingo_strategy_baseline import selection_fingerprint  # noqa: E402
 from baseline_guard_visibility import announce_if_inactive  # noqa: E402
+from baseline_metric_drift import MARKER_PREFIX, report_metric_drift  # noqa: E402
 
 # Phase 7C: this dataset is gitignored, so absent it every assertion below is
 # skipped and the suite still prints OK. Announce that loudly instead of letting
@@ -99,17 +123,39 @@ class TiingoStrategyBaselineGuardTest(unittest.TestCase):
         last_sessions = {str(f.index.max().date()) for f in self.asset_data.values()}
         self.assertIn(target, last_sessions)
 
-    def test_frozen_headline_metrics(self):
+    def test_headline_metrics_are_recorded_and_reported(self):
+        """INFORMATIONAL by operator decision (Phase 9A). Does not fail on value drift.
+
+        Tiingo re-adjusts prices retroactively for corporate actions, which moves
+        these figures without any change to strategy logic. Failing here for that
+        reason would train the operator to ignore the governing guard, so the
+        values are reported instead and the fingerprint carries the invariant.
+
+        What IS asserted hard: every pinned metric must still be PRODUCED, and be
+        a real number. A metric that vanishes or turns into None/NaN is a
+        structural defect in the metrics path, not vendor drift.
+        """
         metrics = _run_relative_strength_rotation_backtest(
             self.asset_data, self.strategy_params, benchmark_data=self.benchmark,
         )
+        observed = {
+            "net_return_pct": metrics.get("Net Getiri (%)"),
+            "trade_count": metrics.get("Islem Sayisi"),
+            "cagr_pct": metrics.get("CAGR (%)"),
+            "max_drawdown_pct": metrics.get("Max Drawdown (%)"),
+            "sharpe_ratio": metrics.get("Sharpe Ratio"),
+            "win_rate_pct": metrics.get("Win Rate (%)"),
+        }
         expected = self.baseline["metrics"]
-        self.assertEqual(metrics.get("Islem Sayisi"), expected["trade_count"])
-        self.assertAlmostEqual(metrics.get("Net Getiri (%)"), expected["net_return_pct"], places=2)
-        self.assertAlmostEqual(metrics.get("CAGR (%)"), expected["cagr_pct"], places=2)
-        self.assertAlmostEqual(metrics.get("Max Drawdown (%)"), expected["max_drawdown_pct"], places=2)
-        self.assertAlmostEqual(metrics.get("Sharpe Ratio"), expected["sharpe_ratio"], places=2)
-        self.assertAlmostEqual(metrics.get("Win Rate (%)"), expected["win_rate_pct"], places=1)
+
+        for key in expected:
+            self.assertIn(key, observed, f"baseline pins {key} but the guard does not read it")
+            value = observed[key]
+            self.assertIsNotNone(value, f"{key} was not produced by the backtest")
+            self.assertIsInstance(value, (int, float), f"{key} is not numeric: {value!r}")
+            self.assertFalse(math.isnan(float(value)), f"{key} is NaN")
+
+        report_metric_drift("rs_v2_tiingo_strategy_baseline", expected, observed)
 
     def test_selection_fingerprint_matches(self):
         self.assertEqual(self._fingerprint(self.asset_data),
@@ -131,6 +177,41 @@ class TiingoStrategyBaselineGuardTest(unittest.TestCase):
         frozen_digest = self.baseline["selection"]["fingerprint_sha256"]
         perturbed = {s: f for s, f in self.asset_data.items() if s != "MPC"}
         self.assertNotEqual(self._fingerprint(perturbed), frozen_digest)
+
+    def test_metric_movement_alone_cannot_fail_this_guard(self):
+        """The other half of the Phase 9A split, asserted at guard level.
+
+        A vendor re-adjustment moves metrics without moving selections. Pinning
+        metrics exactly made that fail the suite, which is what trained the
+        operator to ignore the guard. Prove the informational path cannot raise,
+        even for a move far larger than any re-adjustment would produce.
+        """
+        metrics = _run_relative_strength_rotation_backtest(
+            self.asset_data, self.strategy_params, benchmark_data=self.benchmark,
+        )
+        observed = {
+            "net_return_pct": metrics.get("Net Getiri (%)"),
+            "trade_count": metrics.get("Islem Sayisi"),
+            "cagr_pct": metrics.get("CAGR (%)"),
+            "max_drawdown_pct": metrics.get("Max Drawdown (%)"),
+            "sharpe_ratio": metrics.get("Sharpe Ratio"),
+            "win_rate_pct": metrics.get("Win Rate (%)"),
+        }
+        absurd = {key: value * 10 for key, value in self.baseline["metrics"].items()}
+        # Capture stdout: this probe deliberately trips the marker, and an
+        # uncaptured marker would be lifted into the suite-level SUITE SUMMARY
+        # on every run. That would train the operator to ignore a drift warning
+        # -- precisely the failure this restructure exists to prevent.
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            records = report_metric_drift("phase9a_metric_movement_probe", absurd, observed)
+        self.assertTrue(any(r["beyond_threshold"] for r in records),
+                        "a 10x baseline shift must register as beyond threshold")
+        self.assertIn(MARKER_PREFIX, buffer.getvalue())
+        # Reaching here at all is the assertion: reporting did not raise. The
+        # fingerprint, asserted exactly above, is what carries the invariant.
+        self.assertEqual(self._fingerprint(self.asset_data),
+                         self.baseline["selection"]["fingerprint_sha256"])
 
 
 if __name__ == "__main__":
