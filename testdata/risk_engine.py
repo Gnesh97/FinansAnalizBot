@@ -18,24 +18,42 @@ from pathlib import Path
 
 import pandas as pd
 
-from testdata.paper_risk_dashboard import (
-    _markdown_table,
-    _monitor_sections,
-    _number,
-    _open_positions_from_trade_log,
-    _read_csv,
-    _section_rows,
-)
-from testdata.strategies.relative_strength_rotation import _atr_from_ohlc
+try:
+    from .paper_risk_dashboard import (
+        _markdown_table,
+        _monitor_sections,
+        _number,
+        _open_positions_from_trade_log,
+        _read_csv,
+        _section_rows,
+    )
+    from .strategies.relative_strength_rotation import _atr_from_ohlc
+except ImportError:
+    from paper_risk_dashboard import (
+        _markdown_table,
+        _monitor_sections,
+        _number,
+        _open_positions_from_trade_log,
+        _read_csv,
+        _section_rows,
+    )
+    from strategies.relative_strength_rotation import _atr_from_ohlc
 
-# Starting defaults, not fit or optimized against backtest data (that would
-# violate the no-parameter-optimization rule for anything touching strategy
-# decisions -- these are advisory-only and do not touch strategy logic).
-# Portfolio heat ceiling follows Tharp's aggregate-open-risk guidance;
-# loss-limit levels are round-number judgment calls pending operator
-# recalibration once real paper-book history accumulates.
+# Advisory-only thresholds; do not touch strategy/ranking logic, so the
+# no-parameter-optimization rule for strategy decisions does not apply, but
+# the same "no false precision" discipline does. Calibrated in Phase 10B
+# (reports/audit/phase10b_*) against the frozen baseline's own history, not
+# fit to it: historical portfolio heat under equal weight ranged 1.60%-4.29%
+# across all 67 live rebalances (p99 4.26%) -- the original 6.0% literature
+# default (Tharp) was loose enough to never fire historically, so it is set
+# here to 5.0%, a round number with margin above the observed range rather
+# than pinned to the observed max. The loss-limit levels were checked against
+# the daily equity-curve return distribution (n=1502 trading days): -3.0%
+# sits near the 1st percentile (fires ~1.4% of days, 21/1502) and -5.0% is a
+# true tail event (3/1502, ~0.2%) -- both left unchanged, evidence already
+# supported them.
 ATR_LENGTH = 20
-PORTFOLIO_HEAT_WARNING_PCT = 6.0
+PORTFOLIO_HEAT_WARNING_PCT = 5.0
 DAILY_LOSS_LIMIT_WARNING_PCT = -3.0
 KILL_SWITCH_LOSS_LIMIT_PCT = -5.0
 

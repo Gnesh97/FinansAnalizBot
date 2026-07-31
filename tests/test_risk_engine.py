@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +8,8 @@ from pathlib import Path
 import pandas as pd
 
 from testdata.risk_engine import build_risk_engine_report, write_risk_engine_report
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _write_fixture_daily_bars(daily_dir: Path, symbol: str, closes: list[float]) -> None:
@@ -284,6 +288,26 @@ class RiskEngineTest(unittest.TestCase):
 
             self.assertIn("fixture-fill-date", text)
             self.assertIn("fixture-signal-date", text)
+
+
+    def test_imports_cleanly_in_script_mode_like_the_nightly_cli_does(self):
+        # runner.py and universe_scanner.py are invoked as scripts in
+        # production (testdata/ on sys.path, bare module names), not as the
+        # testdata package -- that path once broke because risk_engine.py's
+        # own internal imports used the package-absolute form unconditionally
+        # (`from testdata.paper_risk_dashboard import ...`), which only
+        # resolves when the project root, not testdata/, is on sys.path.
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.path.insert(0, 'testdata'); import risk_engine",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
