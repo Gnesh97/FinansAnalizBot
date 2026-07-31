@@ -422,8 +422,8 @@ class AlpacaPaperSubmitOneTest(unittest.TestCase):
             _write_baseline(latest)
             _write_candidate(latest)
 
-            with patch("testdata.runner.read_alpaca_paper_snapshot", return_value=_snapshot()):
-                with patch("testdata.runner.read_alpaca_paper_assets", return_value={"assets": _asset(), "metadata": {"alpaca_assets_read_success": True}}):
+            with patch("testdata.alpaca_broker_reporting.read_alpaca_paper_snapshot", return_value=_snapshot()):
+                with patch("testdata.alpaca_broker_reporting.read_alpaca_paper_assets", return_value={"assets": _asset(), "metadata": {"alpaca_assets_read_success": True}}):
                     result = run_alpaca_paper_submit_one(str(data_folder))
 
             self.assertEqual(result["summary"]["alpaca_paper_submit_one_status"], "BLOCK")

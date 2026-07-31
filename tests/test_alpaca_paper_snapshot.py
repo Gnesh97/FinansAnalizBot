@@ -117,7 +117,7 @@ class AlpacaPaperSnapshotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             data_folder = Path(tmp) / "testdata" / "hisseler"
             data_folder.mkdir(parents=True)
-            with patch("testdata.runner.read_alpaca_paper_snapshot", side_effect=AssertionError("alpaca called")) as reader:
+            with patch("testdata.alpaca_broker_reporting.read_alpaca_paper_snapshot", side_effect=AssertionError("alpaca called")) as reader:
                 result = run_broker_reconciliation(str(data_folder))
 
             self.assertFalse(reader.called)

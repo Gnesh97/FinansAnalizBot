@@ -234,7 +234,7 @@ class BrokerCutoverBaselineTest(unittest.TestCase):
             _write_state(latest, trades=[_trade()], orders=[])
             snapshot = _snapshot(positions=[])
 
-            with patch("testdata.runner.read_alpaca_paper_snapshot", return_value=snapshot) as reader:
+            with patch("testdata.alpaca_broker_reporting.read_alpaca_paper_snapshot", return_value=snapshot) as reader:
                 result = run_broker_cutover_readiness(str(data_folder))
 
             self.assertTrue(reader.called)
@@ -251,7 +251,7 @@ class BrokerCutoverBaselineTest(unittest.TestCase):
             _write_state(latest, trades=[_trade()], orders=[])
             snapshot = _snapshot(positions=[])
 
-            with patch("testdata.runner.read_alpaca_paper_snapshot", return_value=snapshot) as reader:
+            with patch("testdata.alpaca_broker_reporting.read_alpaca_paper_snapshot", return_value=snapshot) as reader:
                 result = run_create_broker_cutover_baseline(str(data_folder))
 
             self.assertTrue(reader.called)

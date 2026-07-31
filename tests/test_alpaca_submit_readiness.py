@@ -163,8 +163,8 @@ class AlpacaSubmitReadinessTest(unittest.TestCase):
             _write_baseline(latest)
             _write_candidate(latest)
 
-            with patch("testdata.runner.read_alpaca_paper_snapshot", return_value=_snapshot()) as snapshot_reader:
-                with patch("testdata.runner.read_alpaca_paper_assets", return_value={"assets": _asset(), "metadata": {"alpaca_assets_read_success": True}}) as asset_reader:
+            with patch("testdata.alpaca_broker_reporting.read_alpaca_paper_snapshot", return_value=_snapshot()) as snapshot_reader:
+                with patch("testdata.alpaca_broker_reporting.read_alpaca_paper_assets", return_value={"assets": _asset(), "metadata": {"alpaca_assets_read_success": True}}) as asset_reader:
                     result = run_alpaca_paper_submit_readiness(str(data_folder))
 
             self.assertTrue(snapshot_reader.called)
