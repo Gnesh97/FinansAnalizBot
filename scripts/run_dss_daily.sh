@@ -137,12 +137,28 @@ if (( WAITED > 0 )); then
     log "network became available after ${WAITED}s"
 fi
 
-# 6. Hold sleep/idle off for the DURATION OF THE CHAIN ONLY.
+# 6. Hold sleep/idle/lid-switch-suspend off for the DURATION OF THE CHAIN ONLY.
 #
-#    The 2026-07-27 run spanned ~13h of wall clock because the machine
-#    suspended repeatedly mid-refresh. The lock is scoped to this process: it is
-#    released the moment the chain exits, so normal sleep behaviour returns.
-#    Nothing is disabled globally.
+#    The 2026-07-27 run spanned ~13h and the 2026-07-31 run spanned ~14h45m of
+#    wall clock because the machine suspended mid-refresh. The 07-31 case was
+#    diagnosed precisely: `--what=sleep:idle` (added after the 07-27 incident)
+#    blocks idle-triggered and explicit suspend calls, but logind treats a
+#    closed lid as a THIRD, separate inhibit category (`handle-lid-switch`) --
+#    closing the lid suspended the machine for ~11h even with that lock held
+#    (journalctl: "Lid closed." -> "Suspending..." at 04:16:57, no delay/denial
+#    logged, resumed at 15:20:34). `handle-lid-switch` is added here so a
+#    closed lid no longer triggers logind's own suspend action while the chain
+#    runs. The lock is scoped to this process: it is released the moment the
+#    chain exits, so the machine returns to its normal suspend-on-lid-close
+#    behaviour immediately afterward. Nothing is disabled globally, and
+#    logind.conf is untouched.
+#
+#    Note: this only stops the suspend action. Screen blanking on lid close is
+#    a separate mechanism (the desktop session's own screensaver/DPMS
+#    handling, observed reacting independently of logind's suspend action in
+#    the 07-31 journal) and is expected to keep working unchanged -- but that
+#    has not been verified against an actual lid-close while this lock is
+#    held, since that can't be exercised from this session.
 #
 #    Verified on this host that a user unit can actually take the lock (it
 #    registers under `systemd-inhibit --list` from inside a transient
@@ -152,11 +168,11 @@ fi
 INHIBIT_PREFIX=()
 if command -v systemd-inhibit >/dev/null 2>&1; then
     INHIBIT_PREFIX=(systemd-inhibit
-        --what=sleep:idle
+        --what=sleep:idle:handle-lid-switch
         --mode=block
         --who="dss-daily"
         --why="nightly DSS chain in progress")
-    log "sleep/idle inhibited for the duration of the chain"
+    log "sleep/idle/lid-switch-suspend inhibited for the duration of the chain"
 else
     log "WARNING: systemd-inhibit not found; the machine may suspend mid-run and stretch the refresh"
 fi
