@@ -506,5 +506,102 @@ class TestSyntheticPayloadsAreNeverDelivered(unittest.TestCase):
         self.assertNotIn("unknown session", sent)
 
 
+class TestMissedSessionDetection(unittest.TestCase):
+    """A machine that is off overnight means the timer never fires -- no run,
+    no state update, no notice. The state file only ever holds the *last*
+    reported session, so a multi-day gap was previously invisible: the next
+    successful run just quietly reports the newest session as if nothing had
+    been skipped. This detects the gap by walking the approved NYSE calendar
+    between the last reported session and the one about to be processed."""
+
+    def test_no_gap_between_consecutive_trading_sessions(self):
+        self.assertEqual(dss_scheduler.detect_missed_sessions("2026-07-23", "2026-07-24"), [])
+
+    def test_same_session_has_no_gap(self):
+        self.assertEqual(dss_scheduler.detect_missed_sessions("2026-07-24", "2026-07-24"), [])
+
+    def test_no_prior_state_has_no_gap(self):
+        # First-ever run: nothing to compare against, not "all history missing".
+        self.assertEqual(dss_scheduler.detect_missed_sessions(None, "2026-07-24"), [])
+        self.assertEqual(dss_scheduler.detect_missed_sessions("", "2026-07-24"), [])
+
+    def test_detects_missed_sessions_across_a_weekend_plus_machine_gap(self):
+        # Last reported Wed 2026-07-22; machine off Thu/Fri; next run targets
+        # Mon 2026-07-27. Weekend itself must not appear (not trading days).
+        missed = dss_scheduler.detect_missed_sessions("2026-07-22", "2026-07-27")
+        self.assertEqual(missed, ["2026-07-23", "2026-07-24"])
+
+    def test_missed_session_notice_lists_the_dates_and_uses_its_own_marker(self):
+        with patch.object(dss_scheduler, "_load_project_env"), \
+             patch.dict(dss_scheduler.os.environ, {"TELEGRAM_BOT_TOKEN": "", "TELEGRAM_CHAT_ID": ""}, clear=False):
+            result = dss_scheduler.send_missed_session_notice(["2026-07-23", "2026-07-24"])
+        self.assertFalse(result["sent"])
+        self.assertIn(dss_scheduler.MISSED_SESSION_MARKER, result["text"])
+        self.assertIn("2026-07-23", result["text"])
+        self.assertIn("2026-07-24", result["text"])
+        self.assertNotIn(dss_scheduler.DSS_FAILURE_MARKER, result["text"])
+
+    def test_missed_session_notice_is_retried_then_queued(self):
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(dss_scheduler, "_load_project_env"), \
+             patch.dict(dss_scheduler.os.environ, {"TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c"}, clear=False), \
+             patch.object(dss_scheduler, "_post_telegram", side_effect=OSError("down")) as post:
+            result = dss_scheduler.send_missed_session_notice(
+                ["2026-07-23"], attempts=2, retry_sleep_seconds=0,
+                queue_path=Path(temp) / "pending.json", sleep=lambda _: None,
+            )
+        self.assertEqual(post.call_count, 2)
+        self.assertFalse(result["sent"])
+        self.assertTrue(result["queued"])
+
+    def test_chain_sends_missed_session_notice_when_gap_detected_before_running(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "scheduler_state.json"
+            pending_path = Path(temp) / "pending.json"
+            dss_scheduler.save_state({"last_target_session": "2026-07-22", "status": "SENT"}, state_path)
+            with patch.object(dss_scheduler, "_run_step",
+                              return_value={"name": "refresh", "ok": True, "elapsed_sec": 0.1}), \
+                 patch.object(dss_scheduler, "send_missed_session_notice",
+                              return_value={"sent": True}) as notice, \
+                 patch.object(dss_scheduler, "target_session", return_value="2026-07-27"):
+                result = dss_scheduler.run_daily_chain(
+                    as_of=datetime(2026, 7, 27, 22, 0, tzinfo=timezone.utc),
+                    state_path=state_path, pending_notice_path=pending_path,
+                )
+            notice.assert_called_once_with(["2026-07-23", "2026-07-24"], queue_path=pending_path)
+            self.assertEqual(result["status"], "SENT")
+            self.assertEqual(result["missed_sessions"], ["2026-07-23", "2026-07-24"])
+
+    def test_chain_does_not_send_missed_session_notice_when_gap_is_empty(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "scheduler_state.json"
+            dss_scheduler.save_state({"last_target_session": "2026-07-24", "status": "SENT"}, state_path)
+            with patch.object(dss_scheduler, "_run_step",
+                              return_value={"name": "refresh", "ok": True, "elapsed_sec": 0.1}), \
+                 patch.object(dss_scheduler, "send_missed_session_notice") as notice, \
+                 patch.object(dss_scheduler, "target_session", return_value="2026-07-27"):
+                dss_scheduler.run_daily_chain(
+                    as_of=datetime(2026, 7, 27, 22, 0, tzinfo=timezone.utc),
+                    state_path=state_path, pending_notice_path=Path(temp) / "pending.json",
+                )
+            notice.assert_not_called()
+
+    def test_chain_detects_gap_but_does_not_send_when_send_is_false(self):
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "scheduler_state.json"
+            dss_scheduler.save_state({"last_target_session": "2026-07-22", "status": "SENT"}, state_path)
+            with patch.object(dss_scheduler, "_run_step",
+                              return_value={"name": "refresh", "ok": True, "elapsed_sec": 0.1}), \
+                 patch.object(dss_scheduler, "send_missed_session_notice") as notice, \
+                 patch.object(dss_scheduler, "target_session", return_value="2026-07-27"):
+                result = dss_scheduler.run_daily_chain(
+                    as_of=datetime(2026, 7, 27, 22, 0, tzinfo=timezone.utc),
+                    state_path=state_path, pending_notice_path=Path(temp) / "pending.json",
+                    send=False,
+                )
+            notice.assert_not_called()
+            self.assertEqual(result["missed_sessions"], ["2026-07-23", "2026-07-24"])
+
+
 if __name__ == "__main__":
     unittest.main()

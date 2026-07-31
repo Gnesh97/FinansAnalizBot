@@ -41,6 +41,7 @@ STATE_PATH = PROJECT_DIR / "reports" / "dss" / "scheduler_state.json"
 PENDING_NOTICE_PATH = PROJECT_DIR / "reports" / "dss" / "pending_notices.json"
 DSS_FAILURE_MARKER = "DSS did not run"
 LATE_NOTICE_MARKER = "LATE NOTICE"
+MISSED_SESSION_MARKER = "DSS MISSED SESSION"
 
 # Minutes after the NYSE close before a session's EOD bars are treated as
 # publishable. The 01:00 Europe/Istanbul trigger is 18:00 ET, two hours after
@@ -203,6 +204,23 @@ def save_state(state: dict, state_path: Path = STATE_PATH) -> None:
 def already_reported(session: str, state_path: Path = STATE_PATH) -> bool:
     state = load_state(state_path)
     return state.get("last_target_session") == session and state.get("status") == "SENT"
+
+
+def detect_missed_sessions(last_reported_session: str | None, current_session: str) -> list[str]:
+    """NYSE sessions strictly between the last one reported and this one.
+
+    The state file only ever holds the last successful session, so a machine
+    that stayed off for one or more nights leaves no record of what was
+    skipped -- the next run just quietly reports the newest session. A
+    first-ever run (no prior state) is not a gap: there is nothing to have
+    missed yet.
+    """
+    if not last_reported_session or last_reported_session >= current_session:
+        return []
+    coverage = _coverage_module()
+    schedule = coverage.approved_nyse_schedule(last_reported_session, current_session)
+    sessions = sorted(stamp.strftime("%Y-%m-%d") for stamp in schedule.index)
+    return [s for s in sessions if last_reported_session < s < current_session]
 
 
 def _load_project_env() -> None:
@@ -410,6 +428,62 @@ def send_failure_notice(
             "attempts": max(attempts, 1)}
 
 
+def send_missed_session_notice(
+    missed_sessions: list[str],
+    *,
+    attempts: int = NOTICE_SEND_ATTEMPTS,
+    retry_sleep_seconds: float = NOTICE_RETRY_SLEEP_SECONDS,
+    queue_path: Path | None = None,
+    queue_on_failure: bool = True,
+    sleep=time.sleep,
+) -> dict:
+    """Loud notice that one or more sessions were never reported.
+
+    Distinct from send_failure_notice: this is not a failure of tonight's
+    run, it is a symptom of one or more *prior* nights not running at all
+    (most likely the machine was off). Same retry-then-queue mechanism, kept
+    separate rather than sharing MARKER text so a "DSS did not run" alert and
+    a "sessions were silently skipped" alert are never conflated by the
+    operator or by _run_step's own DSS_FAILURE_MARKER stdout check.
+    """
+    _load_project_env()
+    dates = ", ".join(missed_sessions)
+    text = f"{MISSED_SESSION_MARKER}: {len(missed_sessions)} session(s) never reported: {dates}"
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    print(text, flush=True)
+    if not token or not chat_id:
+        print("ERROR: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set -- missed-session notice NOT "
+              "sent (fail-closed locally, not sent to a wrong/missing chat).", flush=True)
+        return {"sent": False, "reason": "telegram_not_configured", "text": text, "queued": False}
+
+    last_detail = ""
+    for attempt in range(1, max(attempts, 1) + 1):
+        try:
+            _post_telegram(text, token, chat_id)
+            return {"sent": True, "text": text, "attempts": attempt, "queued": False}
+        except Exception as exc:
+            last_detail = _redact(str(exc))
+            print(f"[dss-scheduler] missed-session notice send attempt {attempt}/{attempts} "
+                  f"failed: {last_detail}", flush=True)
+            if attempt < max(attempts, 1):
+                sleep(retry_sleep_seconds)
+
+    queued = False
+    if queue_on_failure:
+        if queue_path is None:
+            raise ValueError(
+                "send_missed_session_notice requires an explicit queue_path in order to queue; "
+                "pass dss_scheduler.PENDING_NOTICE_PATH in production or a temporary "
+                "path in tests."
+            )
+        queue_notice(text, last_detail, session=None, path=queue_path)
+        queued = True
+    _undeliverable_banner(text, last_detail, queued)
+    return {"sent": False, "reason": last_detail, "text": text, "queued": queued,
+            "attempts": max(attempts, 1)}
+
+
 def _run_step(step: dict, timeout_seconds: int) -> dict:
     started = datetime.now(timezone.utc)
     print(f"[dss-scheduler] {step['name']}: {step['description']}", flush=True)
@@ -483,9 +557,22 @@ def run_daily_chain(
             return {"status": "DEFERRED_SESSION_NOT_COMPLETE", "target_session": session,
                     "published_session": gate["published_session"]}
 
+    # A machine that stayed off for one or more nights leaves no run and no
+    # state update at all -- the state file only remembers the last session
+    # that WAS reported, so the gap itself would otherwise be invisible.
+    # Checked every invocation (cheap: one calendar lookup) and surfaced loud
+    # until a run actually closes it, since a persisting gap should keep
+    # reminding rather than go quiet after one missed notice.
+    missed_sessions = detect_missed_sessions(load_state(state_path).get("last_target_session"), session)
+    if missed_sessions:
+        print(f"[dss-scheduler] {len(missed_sessions)} session(s) never reported: "
+              f"{', '.join(missed_sessions)}", flush=True)
+        if send:
+            send_missed_session_notice(missed_sessions, queue_path=pending_notice_path)
+
     if not force and already_reported(session, state_path):
         print(f"[dss-scheduler] session {session} already reported and sent; not re-sending.", flush=True)
-        return {"status": "ALREADY_REPORTED", "target_session": session}
+        return {"status": "ALREADY_REPORTED", "target_session": session, "missed_sessions": missed_sessions}
 
     steps = _chain_steps(python_executable or sys.executable, skip_refresh, report_print_only)
     outcomes = []
@@ -509,7 +596,7 @@ def run_daily_chain(
                 "updated_at": now.isoformat().replace("+00:00", "Z"),
             }, state_path)
             return {"status": "FAILED", "target_session": session, "failed_step": outcome["name"],
-                    "error": reason, "notice": notice, "steps": outcomes}
+                    "error": reason, "notice": notice, "steps": outcomes, "missed_sessions": missed_sessions}
 
     save_state({
         "last_target_session": session,
@@ -518,7 +605,7 @@ def run_daily_chain(
         "last_error": "",
     }, state_path)
     print(f"[dss-scheduler] session {session} complete and sent.", flush=True)
-    return {"status": "SENT", "target_session": session, "steps": outcomes}
+    return {"status": "SENT", "target_session": session, "steps": outcomes, "missed_sessions": missed_sessions}
 
 
 def main(argv: list[str] | None = None) -> int:
