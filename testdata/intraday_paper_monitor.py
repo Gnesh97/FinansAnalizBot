@@ -73,15 +73,6 @@ def _number(value):
     return pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
 
 
-def _to_ny_timestamp(value):
-    timestamp = pd.to_datetime(value, errors="coerce")
-    if pd.isna(timestamp):
-        return pd.NaT
-    if timestamp.tzinfo is None:
-        return timestamp.tz_localize(MARKET_TIMEZONE)
-    return timestamp.tz_convert(MARKET_TIMEZONE)
-
-
 def _session_open_delta() -> pd.Timedelta:
     parsed = pd.Timestamp(RTH_OPEN)
     return pd.Timedelta(hours=parsed.hour, minutes=parsed.minute)

@@ -121,42 +121,6 @@ def provider_frame_metadata(frame: pd.DataFrame) -> dict:
     }
 
 
-def _canary_outcome(daily_status: str, raw_status: str) -> str:
-    invalid_tokens = ("INVALID", "WRONG", "DUPLICATE")
-    if any(token in daily_status or token in raw_status for token in invalid_tokens):
-        return "CANARY_INVALID"
-    daily_valid = daily_status == "DAILY_RECOVERED_VALID"
-    raw_valid = raw_status == "RAW_RECOVERED_COMPLETE"
-    if daily_valid and raw_valid:
-        return "CANARY_DAILY_AND_RAW_VALID"
-    if daily_valid:
-        return "CANARY_DAILY_ONLY_VALID"
-    if raw_valid:
-        return "CANARY_RAW_ONLY_VALID"
-    if "FAILED" in daily_status or "FAILED" in raw_status:
-        return "CANARY_REQUEST_FAILED"
-    return "CANARY_EMPTY"
-
-
-def _full_outcome(daily_status: str, raw_status: str) -> str:
-    invalid_tokens = ("INVALID", "WRONG", "DUPLICATE")
-    if any(token in daily_status or token in raw_status for token in invalid_tokens):
-        return "INVALID_EVIDENCE"
-    if "SYSTEMIC" in daily_status or "SYSTEMIC" in raw_status:
-        return "FAILED_SYSTEMIC"
-    if "FAILED" in daily_status or "FAILED" in raw_status:
-        return "FAILED_TRANSIENT"
-    daily_valid = daily_status == "DAILY_RECOVERED_VALID"
-    raw_valid = raw_status == "RAW_RECOVERED_COMPLETE"
-    if daily_valid and raw_valid:
-        return "RECOVERED_DAILY_AND_RAW"
-    if daily_valid:
-        return "RECOVERED_DAILY_ONLY"
-    if raw_valid:
-        return "RECOVERED_RAW_ONLY"
-    return "RECOVERED_NEITHER"
-
-
 def _is_sha256(value: object) -> bool:
     text = str(value)
     return len(text) == 64 and all(char in "0123456789abcdef" for char in text.lower())

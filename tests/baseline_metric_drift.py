@@ -187,11 +187,6 @@ def report_metric_drift(guard_name: str, expected: dict, observed: dict) -> list
     return records
 
 
-def announced_guards() -> list[str]:
-    """Guards that announced beyond-threshold drift in this process."""
-    return sorted(_announced)
-
-
 def reset_for_testing() -> None:
     """Clear the one-time announcement registry (used by this module's own tests)."""
     _announced.clear()

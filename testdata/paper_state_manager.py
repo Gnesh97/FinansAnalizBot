@@ -49,14 +49,6 @@ def _write_state_csv(path, df, columns, fill_value=""):
     return frame
 
 
-def build_empty_paper_state():
-    return {
-        "pending_orders": pd.DataFrame(columns=PAPER_PENDING_ORDERS_COLUMNS),
-        "order_review": pd.DataFrame(columns=PAPER_ORDER_REVIEW_COLUMNS),
-        "trade_log": pd.DataFrame(columns=PAPER_TRADE_LOG_COLUMNS),
-    }
-
-
 def read_pending_orders(reports_dir):
     return _read_state_csv(
         _reports_dir(reports_dir) / PENDING_ORDERS_FILE,
