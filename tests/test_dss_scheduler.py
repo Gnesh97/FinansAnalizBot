@@ -603,5 +603,71 @@ class TestMissedSessionDetection(unittest.TestCase):
             self.assertEqual(result["missed_sessions"], ["2026-07-23", "2026-07-24"])
 
 
+class TestRiskEngineChainStep(unittest.TestCase):
+    """Phase 11B: Risk Engine Mode A (ATR/heat/loss-limit/kill-switch) is
+    advisory-only reporting -- it must never gate or delay the BUY/SELL
+    report, so it runs last and its failure must not fail the chain."""
+
+    def test_chain_includes_a_risk_engine_step(self):
+        steps = dss_scheduler._chain_steps("python", skip_refresh=False)
+        names = [step["name"] for step in steps]
+        self.assertIn("risk_engine", names)
+        risk_step = next(step for step in steps if step["name"] == "risk_engine")
+        self.assertIn("--risk-engine-dashboard", risk_step["command"])
+        self.assertEqual(Path(risk_step["command"][1]).name, "universe_scanner.py")
+
+    def test_risk_engine_step_runs_after_the_report_step(self):
+        steps = dss_scheduler._chain_steps("python", skip_refresh=False)
+        names = [step["name"] for step in steps]
+        self.assertLess(names.index("report"), names.index("risk_engine"))
+
+    def test_risk_engine_step_is_non_critical_unlike_the_other_three(self):
+        steps = dss_scheduler._chain_steps("python", skip_refresh=False)
+        by_name = {step["name"]: step for step in steps}
+        self.assertFalse(by_name["risk_engine"].get("critical", True))
+        for critical_name in ("refresh", "signals", "report"):
+            self.assertTrue(by_name[critical_name].get("critical", True))
+
+    def test_chain_still_invokes_only_report_clis_with_the_new_step(self):
+        # risk_engine reuses universe_scanner.py (same binary as signals), so
+        # the set of distinct scripts invoked must not grow.
+        steps = dss_scheduler._chain_steps("python", skip_refresh=False)
+        scripts = {Path(step["command"][1]).name for step in steps}
+        self.assertEqual(scripts, {"vericekici_updated.py", "universe_scanner.py", "bot.py"})
+
+    def test_chain_does_not_fail_when_only_the_risk_engine_step_fails(self):
+        def _run(step, timeout_seconds):
+            if step["name"] == "risk_engine":
+                return {"name": "risk_engine", "ok": False, "error": "risk_engine blew up"}
+            return {"name": step["name"], "ok": True}
+
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "scheduler_state.json"
+            with patch.object(dss_scheduler, "_run_step", side_effect=_run), \
+                 patch.object(dss_scheduler, "send_failure_notice") as notice, \
+                 patch.object(dss_scheduler, "target_session", return_value="2026-07-24"):
+                result = dss_scheduler.run_daily_chain(as_of=FRIDAY, state_path=state_path)
+            self.assertEqual(result["status"], "SENT")
+            notice.assert_not_called()
+            state = dss_scheduler.load_state(state_path)
+            self.assertEqual(state["status"], "SENT")
+
+    def test_chain_still_fails_when_the_report_step_fails_even_with_risk_engine_present(self):
+        def _run(step, timeout_seconds):
+            if step["name"] == "report":
+                return {"name": "report", "ok": False, "error": "report blew up"}
+            return {"name": step["name"], "ok": True}
+
+        with tempfile.TemporaryDirectory() as temp:
+            state_path = Path(temp) / "scheduler_state.json"
+            with patch.object(dss_scheduler, "_run_step", side_effect=_run), \
+                 patch.object(dss_scheduler, "send_failure_notice", return_value={"sent": True}) as notice, \
+                 patch.object(dss_scheduler, "target_session", return_value="2026-07-24"):
+                result = dss_scheduler.run_daily_chain(as_of=FRIDAY, state_path=state_path)
+            self.assertEqual(result["status"], "FAILED")
+            self.assertEqual(result["failed_step"], "report")
+            notice.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

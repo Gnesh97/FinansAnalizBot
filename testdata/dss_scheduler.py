@@ -84,12 +84,14 @@ def _chain_steps(python_executable: str, skip_refresh: bool, report_print_only: 
             "description": "paced Tiingo daily refresh + strict validation",
             "command": [python_executable, str(BASE_DIR / "vericekici_updated.py"),
                         "--dataset-profile", DATASET_PROFILE, "--refresh-daily"],
+            "critical": True,
         })
     steps.append({
         "name": "signals",
         "description": "paper signal generation",
         "command": [python_executable, str(BASE_DIR / "universe_scanner.py"),
                     "--data-profile", DATASET_PROFILE, "--paper-report"],
+        "critical": True,
     })
     # --print-only renders the report to stdout/file without dispatching it, so
     # the wiring can be exercised end to end without messaging the operator.
@@ -101,6 +103,17 @@ def _chain_steps(python_executable: str, skip_refresh: bool, report_print_only: 
         "name": "report",
         "description": "DSS report render + Telegram send" if not report_print_only else "DSS report render (print-only, no send)",
         "command": report_command,
+        "critical": True,
+    })
+    # Advisory only (Phase 10A/10B): ATR/heat/loss-limit/kill-switch. Runs
+    # last and is non-critical so a failure here can never delay or block the
+    # BUY/SELL report -- that is the one notice the operator actually acts on.
+    steps.append({
+        "name": "risk_engine",
+        "description": "advisory Risk Engine Mode A report (non-critical)",
+        "command": [python_executable, str(BASE_DIR / "universe_scanner.py"),
+                    "--data-profile", DATASET_PROFILE, "--risk-engine-dashboard"],
+        "critical": False,
     })
     return steps
 
@@ -583,6 +596,13 @@ def run_daily_chain(
             outcome = {"name": step["name"], "ok": False,
                        "error": f"{step['name']} step timed out after {step_timeout_seconds}s"}
         outcomes.append(outcome)
+        if not outcome["ok"] and not step.get("critical", True):
+            # Advisory steps (Risk Engine) must never block or delay the
+            # BUY/SELL report or trigger a "DSS did not run" notice -- that
+            # would misreport a healthy chain as failed.
+            print(f"[dss-scheduler] non-critical step {step['name']} failed, continuing: "
+                  f"{outcome['error']}", flush=True)
+            continue
         if not outcome["ok"]:
             reason = outcome["error"]
             notice = {"sent": False, "reason": "already_sent_by_report_step"}
