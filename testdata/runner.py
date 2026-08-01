@@ -90,7 +90,6 @@ try:
     from .alpaca_broker_reporting import (
         _alpaca_config,
         _alpaca_config_for_data_folder,
-        _alpaca_get_json,
         _alpaca_report_lines,
         _paper_order_review_decisions,
         _paper_signal_lookup,
@@ -277,7 +276,6 @@ except ImportError:
     from alpaca_broker_reporting import (
         _alpaca_config,
         _alpaca_config_for_data_folder,
-        _alpaca_get_json,
         _alpaca_report_lines,
         _paper_order_review_decisions,
         _paper_signal_lookup,

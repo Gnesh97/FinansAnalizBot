@@ -25,14 +25,25 @@ run_broker_reconciliation / run_alpaca_paper_submit_readiness /
 run_alpaca_paper_submit_one / _write_alpaca_order_preview /
 run_broker_cutover_readiness / run_create_broker_cutover_baseline the same
 way, and runner.py's own _fetch_pending_raw_5min calls _alpaca_config.
+
+run_alpaca_paper_check talks to Alpaca via the alpaca-py SDK's TradingClient
+(Phase 18) rather than a hand-rolled urllib call -- alpaca-py was already a
+declared project dependency and already used for market-data fetching
+elsewhere (runner.py's _fetch_pending_raw_5min); this made the account/
+positions/orders read path consistent with that instead of being its own
+one-off REST client. The broker-snapshot path used by every other function
+in this module (alpaca_paper_snapshot.py's AlpacaPaperSnapshotClient) is a
+deliberately separate, more heavily safety-engineered client (read-only
+enforcement, credential redaction in errors, endpoint-mode gating) and was
+NOT migrated -- that would mean rebuilding those guarantees against the
+SDK's own exception surface, a larger and more careful undertaking left for
+a future phase.
 """
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-from urllib import parse, request
 
 import pandas as pd
 
@@ -70,23 +81,6 @@ def _alpaca_config(env_path=None):
         or "https://paper-api.alpaca.markets"
     ).rstrip("/")
     return api_key, secret_key, base_url
-
-
-def _alpaca_get_json(base_url, path, api_key, secret_key, query=None):
-    url = f"{base_url}{path}"
-    if query:
-        url = f"{url}?{parse.urlencode(query)}"
-    req = request.Request(
-        url,
-        headers={
-            "APCA-API-KEY-ID": api_key,
-            "APCA-API-SECRET-KEY": secret_key,
-            "Accept": "application/json",
-        },
-        method="GET",
-    )
-    with request.urlopen(req, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
 
 
 def _alpaca_report_lines(summary):
@@ -262,24 +256,28 @@ def run_alpaca_paper_check(data_folder="hisseler", report_output_dir="reports", 
         summary["warnings"].append("Missing ALPACA_API_KEY or ALPACA_SECRET_KEY.")
     else:
         try:
-            account = _alpaca_get_json(base_url, "/v2/account", api_key, secret_key)
-            positions = _alpaca_get_json(base_url, "/v2/positions", api_key, secret_key)
-            orders = _alpaca_get_json(
-                base_url,
-                "/v2/orders",
-                api_key,
-                secret_key,
-                query={"status": "open", "limit": 100},
-            )
+            try:
+                from alpaca.trading.client import TradingClient
+                from alpaca.trading.enums import QueryOrderStatus
+                from alpaca.trading.requests import GetOrdersRequest
+            except ModuleNotFoundError as import_error:
+                if import_error.name != "alpaca":
+                    raise
+                raise RuntimeError("missing alpaca-py; install with python -m pip install alpaca-py") from import_error
+
+            client = TradingClient(api_key, secret_key, paper=True)
+            account = client.get_account()
+            positions = client.get_all_positions()
+            orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=100))
             summary.update(
                 {
                     "connection_status": "ok",
-                    "account_status": account.get("status", ""),
-                    "buying_power": account.get("buying_power", ""),
-                    "cash": account.get("cash", ""),
-                    "equity": account.get("equity", ""),
-                    "portfolio_value": account.get("portfolio_value", ""),
-                    "pattern_day_trader": account.get("pattern_day_trader", ""),
+                    "account_status": account.status.value if account.status is not None else "",
+                    "buying_power": account.buying_power or "",
+                    "cash": account.cash or "",
+                    "equity": account.equity or "",
+                    "portfolio_value": account.portfolio_value or "",
+                    "pattern_day_trader": account.pattern_day_trader,
                     "open_positions_count": len(positions) if isinstance(positions, list) else 0,
                     "open_orders_count": len(orders) if isinstance(orders, list) else 0,
                     "next_action": "Review dry-run order preview; no broker orders submitted.",
