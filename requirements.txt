@@ -7,3 +7,4 @@ yfinance
 requests
 pandas-market-calendars
 tabulate>=0.9,<0.11
+vectorbt  # research_sandbox/ only -- not imported by testdata/ production code

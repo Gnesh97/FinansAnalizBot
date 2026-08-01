@@ -47,6 +47,7 @@ testdata/hisseler2/
 testdata/hisseler3/
 data/
 datasets/
+research_sandbox/output/
 output/
 
 # SQLite state database
