@@ -15,9 +15,10 @@ extraction (_read_env_file, _paper_order_key, _load_paper_order_review,
 _report_output_paths) -- those are imported locally, inside the functions
 that need them, specifically to avoid a circular top-level import (runner.py
 imports this module at load time; this module must not import runner.py at
-load time in return). _read_env_file in particular stays in runner.py
-because testdata/alpaca_inactive_asset_feasibility.py already imports it
-from there.
+load time in return). _read_env_file stayed in runner.py rather than moving
+with this extraction, mainly to keep the move minimal (Phase 19 removed its
+other former consumer, testdata/alpaca_inactive_asset_feasibility.py, as
+dead code -- this module's own lazy import is now the only caller).
 
 Conversely, runner.py imports several names back from here: bot.py imports
 run_alpaca_paper_check directly from testdata.runner, several tests import

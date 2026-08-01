@@ -50,8 +50,6 @@ COMPILE_TARGETS = [
     "testdata/quantconnect_port_contract.py",
     "quantconnect/rs_m126_top30_sma100_no_regime/port_helpers.py",
     "quantconnect/rs_m126_top30_sma100_no_regime/main.py",
-    "testdata/delisted_security_metadata.py",
-    "testdata/delisted_alpaca_price_coverage.py",
     "tests/test_rs_v2_clean_data.py",
     "tests/test_rs_v2_session_coverage.py",
     "tests/test_rs_v2_coverage_audit.py",
