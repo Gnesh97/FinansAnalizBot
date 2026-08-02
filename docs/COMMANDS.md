@@ -21,13 +21,9 @@ Backup: `scripts/backup_latest_reports.bat`
 
 En kolay kullanim: Windows'ta `scripts/*.bat` dosyalarina cift tikla.
 
-## Docker ile tasima
+## Not: --data-profile
 
-- Projeyi Docker Desktop'ta gormek icin once bu makinede image build edilir.
-- Image export etmek icin: `scripts/export_docker_image.bat`
-- Diger bilgisayarda image yuklemek icin: `scripts/load_docker_image.bat`
-- `bot-kopya-image.tar` dosyasini diger bilgisayara kopyala, sonra `docker load -i bot-kopya-image.tar` calistir.
-- Image yuklendikten sonra Docker Desktop'ta `Images` altinda gorunur; `docker compose up` calisinca `Containers` altinda da gorunur.
+Yukaridaki komutlarin cogu `--data-profile` belirtmezse varsayilan `rs_v2_sip`'i kullanir (dondurulmus/frozen tarihsel veri). Canli/guncel veri icin `--data-profile rs_v2_tiingo` eklemek gerekir.
 
 ## En sik kullanacagin 3 komut
 

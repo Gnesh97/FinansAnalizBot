@@ -1,5 +1,13 @@
 # Architecture Review
 
+**2026-08-02 update:** `runner.py` has since been split (8,687 -> 5,182 lines): ChatGPT master
+report, Alpaca broker reporting, research/validation reports, and data-governance reports each
+moved to their own sibling module (`chatgpt_master_report.py`, `alpaca_broker_reporting.py`,
+`research_validation_reports.py`, `data_governance_reports.py`). The `report_schemas.py`
+suggestion in Section 8 below is already done. The rest of this doc (module map, refactor
+sequence) predates that split and describes the pre-split single-file state below -- read it
+as historical context for *why* the split happened, not as the current file layout.
+
 ## 1. Current Architecture Summary
 
 * CLI entry point: `testdata/universe_scanner.py`. Argparse ile command flags alir, `VALIDATION_EXPERIMENTS` listesini tutar ve `runner.run_strategy_experiments()` veya `runner.run_alpaca_paper_check()` cagrisi yapar.

@@ -39,6 +39,9 @@ module). Reuses the project's existing Tiingo daily data
   relative-strength rotation strategy, reusing the real selection logic, simulating each
   combination's equity curve with vectorbt, and writing a comparison table + heatmap to
   `output/`.
+- `rs_factor_combination.py` -- compares the production momentum-only score against a
+  momentum-minus-z-scored-ATR% composite, same lookback/rebalance/top-n, reusing
+  `_relative_strength_daily_features` read-only.
 
 ## Output
 

@@ -4,7 +4,11 @@ Research, backtest, local paper-trading cockpit, and broker-readiness tooling fo
 
 ## Current Project Status
 
-Research-only; not live-trading ready. Current strategy results are not investable evidence while survivorship bias remains unresolved. See [PROJECT_STATUS.md](PROJECT_STATUS.md).
+Decision-support only, not an auto-trading bot; the operator enters all broker orders manually. Live data profile is Tiingo (`rs_v2_tiingo`); survivorship bias (delisted securities) remains a known, unresolved limitation. See [PROJECT_STATUS.md](PROJECT_STATUS.md).
+
+## Nightly DSS Chain
+
+The primary production path is a nightly systemd user timer (01:00 Europe/Istanbul, Linux), not the manual BAT workflow below: paced Tiingo refresh -> strict validation -> signal generation -> report -> Telegram, via `scripts/run_dss_daily.sh` -> `testdata/dss_scheduler.py` -> `bot.py --mode dss-report`. The BAT-file workflow below is a secondary, manual path for local/Windows use.
 
 ## Safety Defaults
 
