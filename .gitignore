@@ -37,6 +37,7 @@ Thumbs.db
 *.log
 
 # Large/local data directories
+hisseler/87DATA/
 testdata/hisseler*/
 testdata/reports/
 reports/dss/
