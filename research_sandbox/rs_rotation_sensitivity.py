@@ -7,6 +7,11 @@ no costs -- a simplification, not the production backtest engine).
 
 Base config matches the frozen production baseline (rs_m126_top30_sma100_no_regime) exactly
 except for the two dimensions being swept: rs_lookback_days and rs_rebalance_frequency.
+
+--expanded: run the same sweep on the production universe PLUS the full delisted-candidate
+population from rs_survivorship_bias.py (see reports/audit/phase24), instead of the
+production-only universe -- checks whether the "best" lookback/rebalance combo found on
+the survivorship-biased universe still looks best once delisted names are included.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ import vectorbt as vbt
 
 from testdata.data_engine import read_ohlcv_csv_fast
 from testdata.strategies.relative_strength_rotation import _relative_strength_selection
+from rs_survivorship_bias import FULL_POPULATION_LIST_PATH, load_delisted_universe_batched, _normalize_index
 
 DAILY_DIR = REPO_ROOT / "testdata" / "research_data" / "rs_v2_tiingo_market_data" / "daily"
 OUTPUT_DIR = Path(__file__).resolve().parent / "output"
@@ -53,6 +59,15 @@ def load_universe() -> dict[str, pd.DataFrame]:
         frame = read_ohlcv_csv_fast(path)
         frame.attrs["is_daily"] = True
         asset_data[symbol] = frame
+    return asset_data
+
+
+def load_expanded_universe() -> dict[str, pd.DataFrame]:
+    asset_data = {symbol: _normalize_index(frame) for symbol, frame in load_universe().items()}
+    for frame in asset_data.values():
+        frame.attrs["is_daily"] = True
+    delisted = load_delisted_universe_batched(FULL_POPULATION_LIST_PATH)
+    asset_data.update(delisted)
     return asset_data
 
 
@@ -102,9 +117,13 @@ def simulate_combo(asset_data: dict[str, pd.DataFrame], lookback: int, rebalance
     }
 
 
-def run_sweep() -> pd.DataFrame:
-    print(f"Loading universe from {DAILY_DIR} ...")
-    asset_data = load_universe()
+def run_sweep(expanded: bool = False) -> pd.DataFrame:
+    if expanded:
+        print("Loading EXPANDED universe (production + full delisted population) ...")
+        asset_data = load_expanded_universe()
+    else:
+        print(f"Loading universe from {DAILY_DIR} ...")
+        asset_data = load_universe()
     print(f"Loaded {len(asset_data)} symbols.")
 
     rows = []
@@ -121,11 +140,12 @@ def run_sweep() -> pd.DataFrame:
 
     frame = pd.DataFrame(rows)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    csv_path = OUTPUT_DIR / "rs_rotation_sensitivity.csv"
+    csv_name = "rs_rotation_sensitivity_expanded.csv" if expanded else "rs_rotation_sensitivity.csv"
+    csv_path = OUTPUT_DIR / csv_name
     frame.to_csv(csv_path, index=False)
     print(f"\nWrote {csv_path}")
     return frame
 
 
 if __name__ == "__main__":
-    run_sweep()
+    run_sweep(expanded="--expanded" in sys.argv)
