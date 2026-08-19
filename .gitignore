@@ -43,6 +43,7 @@ testdata/reports/
 reports/dss/
 testdata/backups/
 testdata/scratch/
+scratch/hf_full_scan/
 testdata/research_data/
 testdata/hisseler2/
 testdata/hisseler3/
