@@ -1,99 +1,124 @@
-# BOT - Kopya
+# FinansAnalizBot
 
-Research, backtest, local paper-trading cockpit, and broker-readiness tooling for a CSV-first trading workflow. This project is not production live-trading software.
+ABD hisse senetleri için **karar destek (decision-support)** amaçlı, sistematik swing-trading araştırma ve kâğıt üzerinde (paper) takip platformu. Her gece veriyi günceller, sinyal üretir, rapor hazırlar ve Telegram'dan bildirir.
 
-## Current Project Status
+> [!IMPORTANT]
+> Bu proje **otomatik işlem botu değildir** ve canlı işlem yazılımı değildir. Kod tabanında broker'a emir gönderen hiçbir çağrı yoktur. Tüm emirleri operatör elle girer.
 
-Decision-support only, not an auto-trading bot; the operator enters all broker orders manually. Live data profile is Tiingo (`rs_v2_tiingo`); survivorship bias (delisted securities) remains a known, unresolved limitation. See [PROJECT_STATUS.md](PROJECT_STATUS.md).
+## Özellikler
 
-## Nightly DSS Chain
+- **Aktif strateji:** `rs_m126_top30_sma100_no_regime`
+  - 126 günlük momentum skoru, 60 günlük volatiliteye bölünür.
+  - SMA100 trend filtresi uygulanır.
+  - İlk 30 hisse seçilir ve her ay yeniden dengelenir.
+  - Emirler ertesi günün açılış fiyatından hesaplanır.
+  - Strateji bilinçli olarak **dondurulmuştur**; bu projede parametre optimizasyonu yapılmaz.
+- **Evren:** 177 sembollük sabit aday listesi (hash ile doğrulanır). QQQ ve SPY yalnızca benchmark olarak kullanılır, sıralamaya girmez.
+- **Veri:** `rs_v2_tiingo` profili (Tiingo, yalnızca günlük, konsolide veri, ücretsiz katman için saatte ~48 istek ile hız sınırlı). Alpaca IEX/SIP verileri sadece arşiv olarak durur.
+- **Gece zinciri (DSS):** Tiingo yenileme → katı doğrulama → sinyal üretimi → rapor → Telegram. Ek olarak tavsiye niteliğinde (Mode A) bir Risk Engine adımı çalışır.
+- **Kâğıt işlem ve hazırlık araçları:** yürütme önizlemesi, no-lookahead denetimi, SQLite/CSV mutabakatı, Alpaca paper için yalnızca GET (salt okunur) mutabakat.
+- **Araştırma alanı:** `research_sandbox/` altında survivorship bias, rotasyon duyarlılığı, trend gücü filtresi ve piyasa rejimi kapısı deneyleri.
 
-The primary production path is a nightly systemd user timer (01:00 Europe/Istanbul, Linux), not the manual BAT workflow below: paced Tiingo refresh -> strict validation -> signal generation -> report -> Telegram, via `scripts/run_dss_daily.sh` -> `testdata/dss_scheduler.py` -> `bot.py --mode dss-report`. The BAT-file workflow below is a secondary, manual path for local/Windows use.
+## Güvenlik Varsayılanları
 
-## Safety Defaults
+`broker_submit_enabled`, `live_trading_enabled` ve `short_trading_enabled` kodda `False` olarak sabittir ve her çalıştırmada sıfırlanır. Config veya ortam değişkeniyle geçersiz kılınamaz. Kalıcı broker defteri ve paper durumu, insan onayı olmadan değişmez. CSV yerel kaynak-gerçek (source of truth) olarak kalır, SQLite yalnızca ayna/denetim amaçlıdır.
 
-- Live trading is disabled.
-- Broker submit is disabled.
-- Short trading is disabled.
-- Execution preview is not order submission.
-- Alpaca snapshot reconciliation is GET-only and disabled by default.
-- Do not enable broker submit, live trading, or short trading without explicit approval and a separate safety review.
+## Proje Durumu
 
-## Windows Setup
+| Alan | Durum |
+|---|---|
+| Faz | Karar destek sistemi, gece zamanlayıcısı aktif (systemd user timer, 01:00 Europe/Istanbul) |
+| Testler | 746 test, hepsi yeşil (`testdata/run_test_suite.py`) |
+| CI | GitHub Actions, push ve PR'da çalışır |
+| Veri kaynağı | Tiingo (canlı yol) |
+| Son araştırma | Piyasa rejimi kapısı denendi, sonuç olumsuz (aşağıya bakın) |
+
+### Bilinen Sınırlamalar
+
+- **Survivorship bias çözülmedi.** Evren yalnızca güncel bileşenlerden oluşur. Delist olmuş veya birleşmiş şirketler geriye dönük eklenmemiştir. Alpaca üzerinden delist veri toplama denemesi, seyrek kapsama ve ticker yeniden kullanımı kaynaklı kimlik kirlenmesi nedeniyle bırakılmıştır. Kanıtlar `reports/audit/` altındadır.
+- `PARA` (Paramount Global, 2025-08-07'de delist) belgelenmiş ve operatör onaylı bir `EARLY_TERMINAL` istisnasıdır, hata değildir.
+- İki test, 358 dosyalık manifesti gerçek disk I/O ve SHA256 ile doğruladığı için ~4 dakika sürer. Bu bilinçli bir tercihtir.
+- CI `windows-latest` üzerinde çalışır, gece zamanlayıcısı ise Linux (systemd) içindir.
+
+### Araştırma Sonuçları (survivorship bias düzeltmeli evren)
+
+| Deney | Sonuç |
+|---|---|
+| Baz çizgi | %65,86 getiri / 0,76 Sharpe / %20,52 maks. düşüş |
+| Piyasa rejimi kapısı (SPY 200 günlük SMA altında nakit) | %19,10 / 0,37 / %19,12, belirgin biçimde kötü |
+| Trend gücü filtresi | Net bir iyileşme yok |
+| Daha uzun lookback | Tek olumlu (risk ayarlı) sinyal, yalnızca yönlendirici kanıt, öneri değil |
+
+Ayrıntılar: `reports/audit/phase26_*`, `phase27_*`, `phase28_*`.
+
+## Mimari
+
+```
+bot.py                  Ana giriş noktası (--mode dss-report vb.)
+universe_scanner.py     Evren tarama, raporlar, mutabakat komutları
+testdata/               Üretim mantığı, DSS zamanlayıcısı, baseline'lar, test paketi
+research_sandbox/       Araştırma deneyleri (üretim koduna dokunmaz)
+quantconnect/           Strateji portu / karşılaştırma
+scripts/                Gece zinciri ve manuel BAT/PS1/SH scriptleri
+reports/audit/          Eklemeli (append-only) faz denetim raporları
+docs/                   Mimari inceleme ve komut belgeleri
+```
+
+Gece akışı: `scripts/run_dss_daily.sh` → `testdata/dss_scheduler.py` → `bot.py --mode dss-report`.
+
+## Kurulum
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-Copy the example environment file and fill only local placeholders:
-
-```powershell
 copy .env.example .env
 ```
 
-Alpaca values are for paper-only GET/readiness checks unless a separate approved submit workflow is used. Telegram values are optional notification placeholders.
+`.env` içinde yalnızca yerel değerleri doldurun. Alpaca anahtarları paper ve salt okunur kontroller içindir. Telegram bilgileri isteğe bağlıdır. Tiingo erişimi de ayrıca yapılandırılmalıdır.
 
-## Daily Local Paper Workflow
-
-Use the BAT files from the repository root:
-
-```bat
-scripts\run_pending_5min_refresh.bat
-scripts\run_daily_paper_pipeline.bat
-```
-
-Useful report-only operator views:
+## Kullanım
 
 ```powershell
-python universe_scanner.py --paper-decision-inbox
-python universe_scanner.py --paper-risk-dashboard
-python universe_scanner.py --paper-ops-dashboard
-python universe_scanner.py --intraday-paper-monitor
-python universe_scanner.py --execution-preview --pre-submit-check --make-chatgpt-report
-```
-
-## Roadmap Reports
-
-```powershell
+# Salt okunur raporlar ve denetimler
 python universe_scanner.py --closed-trade-report
 python universe_scanner.py --no-lookahead-audit
 python universe_scanner.py --execution-cost-preview
 python universe_scanner.py --sqlite-state-reconciliation
 python universe_scanner.py --broker-reconciliation
 python universe_scanner.py --broker-reconciliation --alpaca-paper-snapshot-readonly
+
+# Gece zincirini elle çalıştırma
+bash scripts/run_dss_daily.sh
 ```
 
-Default broker reconciliation does not call Alpaca. The explicit Alpaca snapshot flag is GET-only; if credentials or network are unavailable it reports WARNING/NOT_AVAILABLE rather than treating the broker account as empty.
+Manuel Windows akışı için `scripts\run_pending_5min_refresh.bat` ve `scripts\run_daily_paper_pipeline.bat` kullanılabilir. Tüm komutlar `docs/COMMANDS.md` içindedir.
 
-## Expected Warnings
+Varsayılan broker mutabakatı Alpaca'yı çağırmaz. Salt okunur bayrak yalnızca GET yapar. Kimlik bilgisi veya ağ yoksa hesabı boş saymaz, WARNING / NOT_AVAILABLE raporlar. Uyarılar operatör için bilgi mesajıdır, emir gönderme izni değildir.
 
-- Broker snapshot unavailable: expected when no broker snapshot is configured or Alpaca credentials/network are unavailable.
-- Pre-submit BLOCK: expected until every local safety gate is deliberately cleared.
-- SQLite paper_order_review mirror warning: CSV remains source of truth.
-- No-lookahead pending next-open warning: expected for pending rows waiting on next valid open data.
+## Raporlar
 
-Warnings are operator prompts, not automatic permission to submit orders.
+- Güncel çıktılar: `testdata/reports/latest`
+- Zaman damgalı çalıştırmalar: `testdata/reports/runs`
+- Ana özet: `testdata/reports/latest/chatgpt_master_report.md`
+- Aksiyon özeti: `testdata/reports/latest/chatgpt_action_report.md`
 
-## Report Paths
-
-- Latest handoff artifacts: `testdata/reports/latest`
-- Timestamped run artifacts: `testdata/reports/runs`
-- Main ChatGPT handoff: `testdata/reports/latest/chatgpt_master_report.md`
-- Current action summary: `testdata/reports/latest/chatgpt_action_report.md`
-
-## Do Not Commit
-
-- `.env` or any secrets.
-- Generated report output files unless intentionally versioned.
-- Local market data, state databases, backups, scratch files, or cache files.
-- Real broker IDs, account IDs, tokens, API keys, or one-off production values.
-
-## Tests
+## Testler
 
 ```powershell
 python testdata\run_test_suite.py
 ```
 
-The test suite is local and uses temp files/mocks for broker safety coverage. It should not require Alpaca credentials and should not submit broker orders.
+Paket yereldir. Geçici dosyalar ve mock kullanır, Alpaca kimlik bilgisi gerektirmez, broker'a emir göndermez.
+
+## Commit Edilmemesi Gerekenler
+
+`.env` ve her türlü gizli bilgi, üretilen rapor çıktıları (bilinçli sürümlenmedikçe), yerel piyasa verisi, durum veritabanları, yedekler, scratch ve cache dosyaları, gerçek broker/hesap kimlikleri ve API anahtarları.
+
+## Katkı ve Çalışma Kuralları
+
+Kod asistanı ve operatör kuralları için [AGENTS.md](AGENTS.md) ve [CLAUDE.md](CLAUDE.md) dosyalarına bakın. Hızlı durum özeti için [PROJECT_STATUS.md](PROJECT_STATUS.md) dosyası kullanılabilir.
+
+## Sorumluluk Reddi
+
+Bu yazılım yalnızca araştırma ve eğitim amaçlıdır, yatırım tavsiyesi değildir. Geçmiş performans gelecek sonuçların garantisi değildir.
