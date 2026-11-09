@@ -1,5 +1,8 @@
 # FinansAnalizBot
 
+[![tests](https://github.com/Gnesh97/FinansAnalizBot/actions/workflows/tests.yml/badge.svg)](https://github.com/Gnesh97/FinansAnalizBot/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 ABD hisse senetleri için **karar destek (decision-support)** amaçlı, sistematik swing-trading araştırma ve kâğıt üzerinde (paper) takip platformu. Her gece veriyi günceller, sinyal üretir, rapor hazırlar ve Telegram'dan bildirir.
 
 > [!IMPORTANT]
@@ -118,6 +121,10 @@ Paket yereldir. Geçici dosyalar ve mock kullanır, Alpaca kimlik bilgisi gerekt
 ## Katkı ve Çalışma Kuralları
 
 Kod asistanı ve operatör kuralları için [AGENTS.md](AGENTS.md) ve [CLAUDE.md](CLAUDE.md) dosyalarına bakın. Hızlı durum özeti için [PROJECT_STATUS.md](PROJECT_STATUS.md) dosyası kullanılabilir.
+
+## Lisans
+
+Bu proje [MIT Lisansı](LICENSE) altında lisanslanmıştır.
 
 ## Sorumluluk Reddi
 
